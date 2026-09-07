@@ -4,10 +4,15 @@
 
 **A patchbay for Windows audio. Every source, every output, and the cables in between.**
 
+[![Build](https://img.shields.io/github/actions/workflow/status/SeventhSG/LoopIt7/build.yml?branch=main&style=flat-square&label=build&color=E8A33D&labelColor=1A1714)](https://github.com/SeventhSG/LoopIt7/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/SeventhSG/LoopIt7?style=flat-square&color=E8A33D&labelColor=1A1714)](https://github.com/SeventhSG/LoopIt7/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/SeventhSG/LoopIt7/total?style=flat-square&color=E8A33D&labelColor=1A1714)](https://github.com/SeventhSG/LoopIt7/releases)
 [![License](https://img.shields.io/github/license/SeventhSG/LoopIt7?style=flat-square&color=E8A33D&labelColor=1A1714)](LICENSE)
 [![Windows 11](https://img.shields.io/badge/Windows-11-E8A33D?style=flat-square&labelColor=1A1714)](#requirements)
-[![.NET 10](https://img.shields.io/badge/.NET-10-E8A33D?style=flat-square&labelColor=1A1714)](#build-it-yourself)
-[![Download](https://img.shields.io/badge/Download-setup.exe-E8A33D?style=flat-square&labelColor=1A1714)](https://github.com/SeventhSG/LoopIt7/releases/latest)
+
+### [Download LoopIt7 Setup](https://github.com/SeventhSG/LoopIt7/releases/latest)
+
+2.3 MB. Installs for the current user, so there is no admin prompt.
 
 </div>
 

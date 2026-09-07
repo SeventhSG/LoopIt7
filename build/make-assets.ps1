@@ -1,4 +1,4 @@
-﻿# Draws the LoopIt7 mark once and emits every raster the project needs:
+# Draws the LoopIt7 mark once and emits every raster the project needs:
 # the multi size application icon and the README banner.
 #
 #   powershell -ExecutionPolicy Bypass -File build\make-assets.ps1
@@ -174,6 +174,112 @@ $g.Dispose()
 $banner.Save($bannerPath, [System.Drawing.Imaging.ImageFormat]::Png)
 $banner.Dispose()
 Write-Output "banner -> $bannerPath"
+
+# Social preview card. GitHub renders this at 1280 by 640 on links and search results, so it
+# draws the product rather than a logo: three sources, two outputs, cables between them.
+$socialPath = Join-Path $root 'assets\social.png'
+$sw = 1280; $sh = 640
+$social = New-Object System.Drawing.Bitmap($sw, $sh, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+$cg = [System.Drawing.Graphics]::FromImage($social)
+$cg.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+$cg.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
+
+$cardRect = New-Object System.Drawing.Rectangle(0, 0, $sw, $sh)
+$cardBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
+    $cardRect, [System.Drawing.Color]::FromArgb(0x16, 0x13, 0x10), $Ink, 30.0)
+$cg.FillRectangle($cardBrush, $cardRect)
+$cardBrush.Dispose()
+
+# Faint workspace dots, the same texture the canvas uses.
+$dotBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(0x24, 0x20, 0x1C))
+for ($dx = 13; $dx -lt $sw; $dx += 26) {
+    for ($dy = 13; $dy -lt $sh; $dy += 26) {
+        $cg.FillEllipse($dotBrush, ($dx - 1), ($dy - 1), 2, 2)
+    }
+}
+$dotBrush.Dispose()
+
+function Draw-Box($g, [single]$x, [single]$y, [single]$w, [single]$h, [single]$level) {
+    $path = New-RoundedPath $x $y $w $h 9
+    $fill = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(0x19, 0x17, 0x14))
+    $g.FillPath($fill, $path)
+    $fill.Dispose()
+    $edge = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(0x3C, 0x35, 0x2E), 1.5)
+    $g.DrawPath($edge, $path)
+    $edge.Dispose()
+    $path.Dispose()
+
+    # A title bar and a meter, so the box reads as one of the app's cards.
+    $bar = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(0x4A, 0x43, 0x3A))
+    $g.FillRectangle($bar, ($x + 16), ($y + 15), ($w * 0.45), 5)
+    $bar.Dispose()
+
+    $trackPath = New-RoundedPath ($x + 16) ($y + $h - 20) ($w - 32) 6 3
+    $track = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(0x24, 0x20, 0x1C))
+    $g.FillPath($track, $trackPath)
+    $track.Dispose(); $trackPath.Dispose()
+
+    if ($level -gt 0) {
+        $fillPath = New-RoundedPath ($x + 16) ($y + $h - 20) (($w - 32) * $level) 6 3
+        $meter = New-Object System.Drawing.SolidBrush($Accent)
+        $g.FillPath($meter, $fillPath)
+        $meter.Dispose(); $fillPath.Dispose()
+    }
+}
+
+$boxW = 196; $boxH = 74
+$sourceX = 704
+$destX = 1024
+$sourceY = @(196, 300, 404)
+$destY = @(248, 352)
+$levels = @(0.72, 0.48, 0.31)
+$destLevels = @(0.66, 0.44)
+
+# Cables first, so the boxes sit on top of them the way they do in the app.
+$cablePen = New-Object System.Drawing.Pen($Accent, 2.5)
+$cablePen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+$cablePen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+$patch = @(@(0, 0), @(0, 1), @(1, 1), @(2, 0))
+foreach ($link in $patch) {
+    $x1 = $sourceX + $boxW; $y1 = $sourceY[$link[0]] + $boxH / 2
+    $x2 = $destX;           $y2 = $destY[$link[1]] + $boxH / 2
+    $reach = 74
+    $cg.DrawBezier($cablePen, $x1, $y1, ($x1 + $reach), $y1, ($x2 - $reach), $y2, $x2, $y2)
+}
+$cablePen.Dispose()
+
+$portBrush = New-Object System.Drawing.SolidBrush($Accent)
+for ($i = 0; $i -lt 3; $i++) {
+    Draw-Box $cg $sourceX $sourceY[$i] $boxW $boxH $levels[$i]
+    $cg.FillEllipse($portBrush, ($sourceX + $boxW - 5), ($sourceY[$i] + $boxH / 2 - 5), 10, 10)
+}
+for ($i = 0; $i -lt 2; $i++) {
+    Draw-Box $cg $destX $destY[$i] $boxW $boxH $destLevels[$i]
+    $cg.FillEllipse($portBrush, ($destX - 5), ($destY[$i] + $boxH / 2 - 5), 10, 10)
+}
+$portBrush.Dispose()
+
+Draw-Mark $cg 96 134 96 $Accent
+
+$cardTitle = New-Object System.Drawing.Font('Segoe UI Semibold', 84, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
+$cardTag = New-Object System.Drawing.Font('Segoe UI', 27, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
+$cardSmall = New-Object System.Drawing.Font('Segoe UI', 21, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
+$titleInk = New-Object System.Drawing.SolidBrush($Text)
+$dimInk = New-Object System.Drawing.SolidBrush($TextDim)
+$accentInk = New-Object System.Drawing.SolidBrush($Accent)
+
+$cg.DrawString('LoopIt7', $cardTitle, $titleInk, 88, 226)
+$cg.DrawString('A patchbay for Windows audio.', $cardTag, $dimInk, 95, 336)
+$cg.DrawString('Every source, every output, and', $cardSmall, $dimInk, 95, 378)
+$cg.DrawString('the cables in between.', $cardSmall, $dimInk, 95, 408)
+$cg.DrawString('SeventhSG', $cardSmall, $accentInk, 95, 520)
+
+$cardTitle.Dispose(); $cardTag.Dispose(); $cardSmall.Dispose()
+$titleInk.Dispose(); $dimInk.Dispose(); $accentInk.Dispose()
+$cg.Dispose()
+$social.Save($socialPath, [System.Drawing.Imaging.ImageFormat]::Png)
+$social.Dispose()
+Write-Output "social -> $socialPath"
 
 # Installer artwork. Inno Setup wants 24 bit BMPs at these exact sizes.
 $installerDir = Join-Path $root 'installer'

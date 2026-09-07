@@ -1,0 +1,993 @@
+using System.Collections.ObjectModel;
+using System.Windows.Threading;
+using LoopIt7.Audio;
+using LoopIt7.Audio.Graph;
+using LoopIt7.Models;
+using LoopIt7.Services;
+
+namespace LoopIt7.ViewModels;
+
+public enum WorkspaceTab
+{
+    Patchbay,
+    Devices,
+    Midi
+}
+
+public sealed class MainViewModel : ObservableObject, IDisposable
+{
+    /// <summary>Meter refresh. Fast enough to read a transient, slow enough to stay free.</summary>
+    private static readonly TimeSpan MeterInterval = TimeSpan.FromMilliseconds(33);
+
+    /// <summary>Windows fires several endpoint notifications per plug event. Coalesce them.</summary>
+    private static readonly TimeSpan DeviceSettleTime = TimeSpan.FromMilliseconds(400);
+
+    /// <summary>How often to reopen anything that is waiting on a device or a program.</summary>
+    private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(3);
+
+    private const double LaneSourceX = 48;
+    private const double LaneDestinationX = 560;
+    private const double LaneTop = 32;
+    private const double LaneSpacing = 128;
+
+    private readonly Dispatcher _dispatcher;
+    private readonly DeviceService _devices;
+    private readonly AudioGraph _graph;
+    private readonly SettingsService _settingsService;
+    private readonly AppSettings _settings;
+    private readonly DispatcherTimer _meterTimer;
+    private readonly DispatcherTimer _deviceTimer;
+    private readonly DispatcherTimer _retryTimer;
+    private readonly DispatcherTimer _noticeTimer;
+
+    private bool _loading = true;
+    private bool _disposed;
+
+    private WorkspaceTab _tab = WorkspaceTab.Patchbay;
+    private bool _isRunning;
+    private int _latencyMs = 10;
+    private string _statusText = "Nothing patched yet";
+    private string? _notice;
+    private string _newPresetName = string.Empty;
+    private CableViewModel? _selectedCable;
+    private int _liveNodeCount;
+
+    public MainViewModel(Dispatcher dispatcher)
+    {
+        _dispatcher = dispatcher;
+        _settingsService = new SettingsService();
+        _settings = _settingsService.Load();
+
+        _devices = new DeviceService();
+        _graph = new AudioGraph(_devices);
+        _graph.NodeFailed += OnNodeFailed;
+        _devices.DevicesChanged += OnDevicesChanged;
+
+        Midi = new MidiViewModel(Persist);
+
+        ToggleRoutingCommand = new RelayCommand(_ => ToggleRouting());
+        AddSourceCommand = new RelayCommand(AddSourceFromDescriptor);
+        AddDestinationCommand = new RelayCommand(AddDestinationFromDescriptor);
+        RefreshApplicationsCommand = new RelayCommand(_ => RefreshApplications());
+        RefreshDevicesCommand = new RelayCommand(_ => { RefreshDevices(); RebuildDeviceRows(); });
+        ClearPatchbayCommand = new RelayCommand(_ => ClearPatchbay());
+        SavePresetCommand = new RelayCommand(_ => SavePreset(), _ => CanSavePreset);
+        LoadPresetCommand = new RelayCommand(p => LoadPreset(p as PatchPreset));
+        DeletePresetCommand = new RelayCommand(p => DeletePreset(p as PatchPreset));
+        OpenSettingsFolderCommand = new RelayCommand(_ => OpenSettingsFolder());
+        OpenCableSiteCommand = new RelayCommand(_ => OpenUrl(VirtualCableService.RecommendedCableUrl));
+        OpenProjectCommand = new RelayCommand(_ => OpenUrl(ProjectUrl));
+        SelectTabCommand = new RelayCommand(p =>
+        {
+            if (p is WorkspaceTab tab) Tab = tab;
+        });
+
+        foreach (var preset in _settings.Presets) Presets.Add(preset);
+
+        RefreshDevices();
+        RefreshApplications();
+        RebuildDeviceRows();
+        RestoreWorkspace(_settings.Nodes, _settings.Cables);
+
+        Midi.ApplySavedRoutes(_settings.MidiRoutes.Select(r => (r.Input, r.Output)));
+
+        _meterTimer = new DispatcherTimer(DispatcherPriority.Render) { Interval = MeterInterval };
+        _meterTimer.Tick += OnMeterTick;
+
+        _deviceTimer = new DispatcherTimer { Interval = DeviceSettleTime };
+        _deviceTimer.Tick += OnDeviceSettleTick;
+
+        _retryTimer = new DispatcherTimer { Interval = RetryInterval };
+        _retryTimer.Tick += (_, _) => _graph.RetryPending();
+
+        _noticeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
+        _noticeTimer.Tick += (_, _) => { _noticeTimer.Stop(); Notice = null; };
+
+        Presets.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasPresets));
+
+        _latencyMs = _settings.LatencyMs is 3 or 5 or 10 or 20 or 40 ? _settings.LatencyMs : 10;
+        _graph.BufferMilliseconds = _latencyMs;
+        _settings.StartWithWindows = StartupService.IsEnabled();
+
+        if (Enum.TryParse(_settings.LastTab, out WorkspaceTab savedTab)) _tab = savedTab;
+
+        _loading = false;
+        UpdateStatus();
+    }
+
+    // Collections
+
+    public ObservableCollection<SourceNodeViewModel> Sources { get; } = [];
+    public ObservableCollection<DestinationNodeViewModel> Destinations { get; } = [];
+    public ObservableCollection<CableViewModel> Cables { get; } = [];
+    public ObservableCollection<PatchPreset> Presets { get; } = [];
+
+    /// <summary>Every possible source endpoint: real inputs plus every output tapped in loopback.</summary>
+    public ObservableCollection<AudioDeviceInfo> InputDevices { get; } = [];
+
+    /// <summary>Just the recording endpoints, for the "Inputs" half of the add menu.</summary>
+    public ObservableCollection<AudioDeviceInfo> CaptureDevices { get; } = [];
+
+    /// <summary>Playback endpoints offered as loopback taps.</summary>
+    public ObservableCollection<AudioDeviceInfo> LoopbackDevices { get; } = [];
+
+    public ObservableCollection<AudioDeviceInfo> OutputDevices { get; } = [];
+    public ObservableCollection<AudioApplication> Applications { get; } = [];
+    public ObservableCollection<DeviceRowViewModel> DeviceRows { get; } = [];
+
+    public MidiViewModel Midi { get; }
+
+    public IReadOnlyList<int> LatencyOptions { get; } = [3, 5, 10, 20, 40];
+
+    // Commands
+
+    public RelayCommand ToggleRoutingCommand { get; }
+    public RelayCommand AddSourceCommand { get; }
+    public RelayCommand AddDestinationCommand { get; }
+    public RelayCommand RefreshApplicationsCommand { get; }
+    public RelayCommand RefreshDevicesCommand { get; }
+    public RelayCommand ClearPatchbayCommand { get; }
+    public RelayCommand SavePresetCommand { get; }
+    public RelayCommand LoadPresetCommand { get; }
+    public RelayCommand DeletePresetCommand { get; }
+    public RelayCommand OpenSettingsFolderCommand { get; }
+    public RelayCommand OpenCableSiteCommand { get; }
+    public RelayCommand OpenProjectCommand { get; }
+    public RelayCommand SelectTabCommand { get; }
+
+    public const string ProjectUrl = "https://github.com/SeventhSG/LoopIt7";
+
+    public string AuthorText => "Built by SeventhSG";
+
+    // State
+
+    public WorkspaceTab Tab
+    {
+        get => _tab;
+        set
+        {
+            if (!SetProperty(ref _tab, value)) return;
+            OnPropertyChanged(nameof(IsPatchbayTab));
+            OnPropertyChanged(nameof(IsDevicesTab));
+            OnPropertyChanged(nameof(IsMidiTab));
+
+            _settings.LastTab = value.ToString();
+            Persist();
+        }
+    }
+
+    public bool IsPatchbayTab => _tab == WorkspaceTab.Patchbay;
+    public bool IsDevicesTab => _tab == WorkspaceTab.Devices;
+    public bool IsMidiTab => _tab == WorkspaceTab.Midi;
+
+    public bool IsRunning
+    {
+        get => _isRunning;
+        private set
+        {
+            if (!SetProperty(ref _isRunning, value)) return;
+            OnPropertyChanged(nameof(RoutingButtonText));
+        }
+    }
+
+    public string RoutingButtonText => IsRunning ? "Stop routing" : "Start routing";
+
+    public bool HasNodes => Sources.Count > 0 || Destinations.Count > 0;
+
+    public bool HasVirtualCable => OutputDevices.Any(VirtualCableService.IsVirtual);
+
+    public string RecommendedCableName => VirtualCableService.RecommendedCableName;
+
+    public int LatencyMs
+    {
+        get => _latencyMs;
+        set
+        {
+            if (!SetProperty(ref _latencyMs, value)) return;
+            _graph.BufferMilliseconds = value;
+            if (_loading) return;
+            if (IsRunning) RestartRouting();
+            Persist();
+        }
+    }
+
+    public string StatusText
+    {
+        get => _statusText;
+        private set => SetProperty(ref _statusText, value);
+    }
+
+    public string? Notice
+    {
+        get => _notice;
+        private set
+        {
+            if (!SetProperty(ref _notice, value)) return;
+            OnPropertyChanged(nameof(HasNotice));
+
+            _noticeTimer?.Stop();
+            if (!string.IsNullOrEmpty(value)) _noticeTimer?.Start();
+        }
+    }
+
+    public bool HasNotice => !string.IsNullOrEmpty(_notice);
+
+    public CableViewModel? SelectedCable
+    {
+        get => _selectedCable;
+        set
+        {
+            if (_selectedCable is not null) _selectedCable.IsSelected = false;
+            if (!SetProperty(ref _selectedCable, value)) return;
+            if (_selectedCable is not null) _selectedCable.IsSelected = true;
+            OnPropertyChanged(nameof(HasSelectedCable));
+        }
+    }
+
+    public bool HasSelectedCable => _selectedCable is not null;
+
+    public string NewPresetName
+    {
+        get => _newPresetName;
+        set
+        {
+            if (SetProperty(ref _newPresetName, value)) OnPropertyChanged(nameof(CanSavePreset));
+        }
+    }
+
+    public bool CanSavePreset => !string.IsNullOrWhiteSpace(_newPresetName);
+
+    public bool HasPresets => Presets.Count > 0;
+
+    public string VersionText =>
+        $"Version {typeof(MainViewModel).Assembly.GetName().Version?.ToString(3) ?? "1.0.0"}";
+
+    // Options
+
+    public bool StartWithWindows
+    {
+        get => _settings.StartWithWindows;
+        set
+        {
+            if (_settings.StartWithWindows == value) return;
+            _settings.StartWithWindows = value && StartupService.SetEnabled(true);
+            if (!value) StartupService.SetEnabled(false);
+            OnPropertyChanged();
+            Persist();
+        }
+    }
+
+    public bool StartMinimized
+    {
+        get => _settings.StartMinimized;
+        set { _settings.StartMinimized = value; OnPropertyChanged(); Persist(); }
+    }
+
+    public bool AutoStartRouting
+    {
+        get => _settings.AutoStartRouting;
+        set { _settings.AutoStartRouting = value; OnPropertyChanged(); Persist(); }
+    }
+
+    public bool CloseToTray
+    {
+        get => _settings.CloseToTray;
+        set { _settings.CloseToTray = value; OnPropertyChanged(); Persist(); }
+    }
+
+    public bool MuteHotkeyEnabled
+    {
+        get => _settings.MuteHotkeyEnabled;
+        set
+        {
+            _settings.MuteHotkeyEnabled = value;
+            OnPropertyChanged();
+            Persist();
+            HotkeyPreferenceChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public uint HotkeyModifiers => (uint)_settings.MuteHotkeyModifiers;
+    public uint HotkeyVirtualKey => (uint)_settings.MuteHotkeyKey;
+    public string HotkeyText => "Ctrl + Alt + M";
+
+    public event EventHandler? HotkeyPreferenceChanged;
+
+    public double WindowWidth
+    {
+        get => _settings.WindowWidth;
+        set { _settings.WindowWidth = value; Persist(); }
+    }
+
+    public double WindowHeight
+    {
+        get => _settings.WindowHeight;
+        set { _settings.WindowHeight = value; Persist(); }
+    }
+
+    // Transport
+
+    public void StartIfConfigured()
+    {
+        if (AutoStartRouting && Cables.Count > 0) StartRouting();
+    }
+
+    /// <summary>Mutes every source at once. This is what the global hotkey reaches.</summary>
+    public void ToggleAllSourcesMuted()
+    {
+        bool anyAudible = Sources.Any(s => !s.Muted);
+        foreach (var source in Sources) source.Muted = anyAudible;
+        Notice = anyAudible ? "All sources muted." : "Sources unmuted.";
+    }
+
+    private void ToggleRouting()
+    {
+        if (IsRunning) StopRouting();
+        else StartRouting();
+    }
+
+    private void StartRouting()
+    {
+        if (Sources.Count == 0)
+        {
+            Notice = "Add a source first.";
+            return;
+        }
+
+        if (Destinations.Count == 0)
+        {
+            Notice = "Add an output first.";
+            return;
+        }
+
+        if (Cables.Count == 0)
+        {
+            Notice = "Drag a cable from a source to an output.";
+            return;
+        }
+
+        _graph.BufferMilliseconds = LatencyMs;
+
+        if (!_graph.Start(out string? error))
+        {
+            Notice = error ?? "Routing could not start.";
+            return;
+        }
+
+        Notice = null;
+        IsRunning = true;
+        _meterTimer.Start();
+        _retryTimer.Start();
+        UpdateStatus();
+    }
+
+    private void StopRouting()
+    {
+        _graph.Stop();
+        _meterTimer.Stop();
+        _retryTimer.Stop();
+        IsRunning = false;
+        _liveNodeCount = 0;
+
+        foreach (var node in AllNodes())
+        {
+            node.Peak = 0;
+            node.ApplyStatus(NodeStatus.Idle, null, 0, 0);
+        }
+
+        foreach (var cable in Cables) cable.Peak = 0;
+
+        UpdateStatus();
+    }
+
+    private void RestartRouting()
+    {
+        StopRouting();
+        StartRouting();
+    }
+
+    // Building the patchbay
+
+    private IEnumerable<PatchNodeViewModel> AllNodes() => Sources.Cast<PatchNodeViewModel>().Concat(Destinations);
+
+    private void AddSourceFromDescriptor(object? descriptor)
+    {
+        switch (descriptor)
+        {
+            case AudioDeviceInfo device when device.Kind == AudioSourceKind.Capture:
+                AddDeviceSource(device, loopback: false);
+                break;
+            case AudioDeviceInfo device:
+                AddDeviceSource(device, loopback: true);
+                break;
+            case AudioApplication application:
+                AddApplicationSource(application);
+                break;
+        }
+    }
+
+    private void AddDestinationFromDescriptor(object? descriptor)
+    {
+        if (descriptor is AudioDeviceInfo device) AddDestination(device);
+    }
+
+    private SourceNodeViewModel AddDeviceSource(AudioDeviceInfo device, bool loopback, NodeSettings? saved = null)
+    {
+        var kind = loopback ? SourceKind.DeviceLoopback : SourceKind.Device;
+        string title = saved?.Title ?? device.Name;
+        string subtitle = saved?.Subtitle ?? (loopback ? "system audio" : device.InterfaceName);
+
+        var vm = new SourceNodeViewModel(saved?.Id ?? NewId(), title, subtitle, kind, device.Id, 0, string.Empty);
+        PlaceNode(vm, saved, LaneSourceX, Sources.Count);
+        WireNode(vm);
+
+        Sources.Add(vm);
+        _graph.AddDeviceSource(vm.Id, title, device.Id, loopback);
+        _graph.ConfigureSource(vm.Id, vm.LinearGain, vm.Muted);
+
+        Finish();
+        return vm;
+    }
+
+    private SourceNodeViewModel AddApplicationSource(AudioApplication application, NodeSettings? saved = null)
+    {
+        string title = saved?.Title ?? application.DisplayName;
+        var vm = new SourceNodeViewModel(
+            saved?.Id ?? NewId(), title, "application",
+            SourceKind.Application, string.Empty, application.ProcessId, application.ExecutableName);
+
+        PlaceNode(vm, saved, LaneSourceX, Sources.Count);
+        WireNode(vm);
+
+        Sources.Add(vm);
+        _graph.AddApplicationSource(vm.Id, title, application.ProcessId, application.ExecutableName);
+        _graph.ConfigureSource(vm.Id, vm.LinearGain, vm.Muted);
+
+        Finish();
+        return vm;
+    }
+
+    private DestinationNodeViewModel AddDestination(AudioDeviceInfo device, NodeSettings? saved = null)
+    {
+        bool virtualCable = VirtualCableService.IsVirtual(device);
+        string title = saved?.Title ?? device.Name;
+        string subtitle = saved?.Subtitle ?? (VirtualCableService.FamilyOf(device) ?? device.InterfaceName);
+
+        var vm = new DestinationNodeViewModel(saved?.Id ?? NewId(), title, subtitle, device.Id, virtualCable);
+        PlaceNode(vm, saved, LaneDestinationX, Destinations.Count);
+        WireNode(vm);
+
+        Destinations.Add(vm);
+        _graph.AddDestination(vm.Id, title, device.Id);
+        _graph.ConfigureDestination(vm.Id, vm.LinearGain, vm.Muted);
+
+        Finish();
+        return vm;
+    }
+
+    private void PlaceNode(PatchNodeViewModel node, NodeSettings? saved, double laneX, int index)
+    {
+        if (saved is not null)
+        {
+            node.X = saved.X;
+            node.Y = saved.Y;
+            node.GainDb = saved.GainDb;
+            node.Muted = saved.Muted;
+            return;
+        }
+
+        node.X = laneX;
+        node.Y = LaneTop + index * LaneSpacing;
+    }
+
+    private void WireNode(PatchNodeViewModel node)
+    {
+        node.RemoveRequested += (_, _) => RemoveNode(node);
+        node.MixChanged += (_, _) => OnNodeMixChanged(node);
+        node.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is not (nameof(PatchNodeViewModel.X) or nameof(PatchNodeViewModel.Y))) return;
+            UpdateCanvasExtent();
+            Persist();
+        };
+    }
+
+    private double _canvasWidth = 640;
+    private double _canvasHeight = 400;
+
+    /// <summary>
+    /// The canvas grows to hold whatever has been dragged onto it. Without this the scroll
+    /// area would stay at its starting size and boxes moved to the right would be unreachable.
+    /// </summary>
+    public double CanvasWidth
+    {
+        get => _canvasWidth;
+        private set => SetProperty(ref _canvasWidth, value);
+    }
+
+    public double CanvasHeight
+    {
+        get => _canvasHeight;
+        private set => SetProperty(ref _canvasHeight, value);
+    }
+
+    private void UpdateCanvasExtent()
+    {
+        double right = 640;
+        double bottom = 400;
+
+        foreach (var node in AllNodes())
+        {
+            right = Math.Max(right, node.X + PatchNodeViewModel.NodeWidth + 220);
+            bottom = Math.Max(bottom, node.Y + PatchNodeViewModel.NodeHeight + 160);
+        }
+
+        CanvasWidth = right;
+        CanvasHeight = bottom;
+    }
+
+    private void OnNodeMixChanged(PatchNodeViewModel node)
+    {
+        if (node.IsSource) _graph.ConfigureSource(node.Id, node.LinearGain, node.Muted);
+        else _graph.ConfigureDestination(node.Id, node.LinearGain, node.Muted);
+
+        Persist();
+    }
+
+    public void RemoveNode(PatchNodeViewModel node)
+    {
+        foreach (var cable in Cables.Where(c => c.Source == node || c.Destination == node).ToList())
+        {
+            RemoveCable(cable, persist: false);
+        }
+
+        _graph.RemoveNode(node.Id);
+
+        if (node is SourceNodeViewModel source) Sources.Remove(source);
+        else if (node is DestinationNodeViewModel destination) Destinations.Remove(destination);
+
+        Finish();
+    }
+
+    /// <summary>
+    /// Patches a cable. Returns false when the pair is already joined, which is what the
+    /// canvas needs in order to snap the dragged cable back instead of stacking a duplicate.
+    /// </summary>
+    public bool TryConnect(SourceNodeViewModel source, DestinationNodeViewModel destination)
+    {
+        if (Cables.Any(c => c.Source == source && c.Destination == destination)) return false;
+
+        string id = NewId();
+        if (!_graph.Connect(id, source.Id, destination.Id)) return false;
+
+        var cable = new CableViewModel(id, source, destination);
+        cable.RemoveRequested += (_, _) => RemoveCable(cable, persist: true);
+        cable.MixChanged += (_, _) =>
+        {
+            _graph.ConfigureConnection(cable.Id, cable.LinearGain, cable.Muted, cable.DelayMs);
+            Persist();
+        };
+
+        Cables.Add(cable);
+        Finish();
+        return true;
+    }
+
+    public void RemoveCable(CableViewModel cable, bool persist = true)
+    {
+        if (SelectedCable == cable) SelectedCable = null;
+
+        _graph.Disconnect(cable.Id);
+        Cables.Remove(cable);
+        cable.Dispose();
+
+        if (persist) Finish();
+    }
+
+    private void ClearPatchbay()
+    {
+        foreach (var cable in Cables.ToList()) RemoveCable(cable, persist: false);
+        foreach (var node in AllNodes().ToList()) RemoveNode(node);
+
+        if (IsRunning) StopRouting();
+        Finish();
+        Notice = "Patchbay cleared.";
+    }
+
+    private void Finish()
+    {
+        OnPropertyChanged(nameof(HasNodes));
+        UpdateCanvasExtent();
+        if (_loading) return;
+
+        Persist();
+        UpdateStatus();
+    }
+
+    // Device and application discovery
+
+    private void RefreshDevices()
+    {
+        var sources = _devices.GetInputSources();
+        SyncDevices(InputDevices, sources);
+        SyncDevices(CaptureDevices, [.. sources.Where(d => d.Kind == AudioSourceKind.Capture)]);
+        SyncDevices(LoopbackDevices, [.. sources.Where(d => d.Kind == AudioSourceKind.Loopback)]);
+        SyncDevices(OutputDevices, _devices.GetOutputs());
+        OnPropertyChanged(nameof(HasVirtualCable));
+    }
+
+    private static void SyncDevices(ObservableCollection<AudioDeviceInfo> target, IReadOnlyList<AudioDeviceInfo> fresh)
+    {
+        target.Clear();
+        foreach (var device in fresh) target.Add(device);
+    }
+
+    private void RefreshApplications()
+    {
+        var fresh = ApplicationService.GetApplications();
+        Applications.Clear();
+        foreach (var application in fresh) Applications.Add(application);
+    }
+
+    private void RebuildDeviceRows()
+    {
+        DeviceRows.Clear();
+
+        // Outputs first: that is the half people come here to change.
+        foreach (var device in OutputDevices)
+        {
+            DeviceRows.Add(new DeviceRowViewModel(device, _devices, OnDeviceRowChanged));
+        }
+
+        foreach (var device in InputDevices.Where(d => d.Kind == AudioSourceKind.Capture))
+        {
+            DeviceRows.Add(new DeviceRowViewModel(device, _devices, OnDeviceRowChanged));
+        }
+    }
+
+    private void OnDeviceRowChanged() => _dispatcher.BeginInvoke(() =>
+    {
+        RefreshDevices();
+
+        foreach (var row in DeviceRows)
+        {
+            var fresh = OutputDevices.Concat(InputDevices).FirstOrDefault(d => d.Id == row.Id && d.Kind != AudioSourceKind.Loopback);
+            if (fresh is not null) row.Device = fresh;
+        }
+    });
+
+    private void OnDevicesChanged(object? sender, EventArgs e) => _dispatcher.BeginInvoke(() =>
+    {
+        _deviceTimer.Stop();
+        _deviceTimer.Start();
+    });
+
+    private void OnDeviceSettleTick(object? sender, EventArgs e)
+    {
+        _deviceTimer.Stop();
+
+        RefreshDevices();
+        RebuildDeviceRows();
+        Midi.Refresh();
+
+        if (IsRunning) _graph.RetryPending();
+        UpdateStatus();
+    }
+
+    private void OnNodeFailed(object? sender, GraphErrorEventArgs e) => _dispatcher.BeginInvoke(() =>
+    {
+        var node = AllNodes().FirstOrDefault(n => n.Id == e.NodeId);
+        Notice = node is not null ? $"{node.Title}: {e.Message}" : e.Message;
+        _graph.RetryPending();
+    });
+
+    // Metering
+
+    private void OnMeterTick(object? sender, EventArgs e)
+    {
+        int live = 0;
+
+        foreach (var source in Sources)
+        {
+            var status = _graph.GetSourceStatus(source.Id, out string? detail, out int rate, out int channels);
+            source.ApplyStatus(status, detail, rate, channels);
+            source.Peak = status == NodeStatus.Live ? _graph.ReadSourcePeak(source.Id) : 0;
+            if (status == NodeStatus.Live) live++;
+
+            if (source.Kind == SourceKind.Application)
+            {
+                int processId = _graph.GetApplicationProcessId(source.Id);
+                if (processId > 0) source.ProcessId = processId;
+            }
+        }
+
+        foreach (var destination in Destinations)
+        {
+            var status = _graph.GetDestinationStatus(destination.Id, out string? detail, out int rate, out int channels);
+            destination.ApplyStatus(status, detail, rate, channels);
+            destination.Peak = status == NodeStatus.Live ? _graph.ReadDestinationPeak(destination.Id) : 0;
+            if (status == NodeStatus.Live) live++;
+        }
+
+        foreach (var cable in Cables)
+        {
+            cable.Peak = _graph.ReadConnectionPeak(cable.Id);
+        }
+
+        Midi.Tick();
+
+        if (live != _liveNodeCount)
+        {
+            _liveNodeCount = live;
+            UpdateStatus();
+        }
+    }
+
+    private void UpdateStatus()
+    {
+        if (!IsRunning)
+        {
+            StatusText = Cables.Count == 0
+                ? "Nothing patched yet"
+                : $"Stopped · {Describe(Cables.Count, "cable")}";
+            return;
+        }
+
+        int liveSources = Sources.Count(s => s.IsLive);
+        int liveDestinations = Destinations.Count(d => d.IsLive);
+
+        StatusText = $"Live · {Describe(liveSources, "source")} · {Describe(Cables.Count, "cable")} · " +
+                     $"{Describe(liveDestinations, "output")} · {LatencyMs} ms buffer";
+    }
+
+    private static string Describe(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
+
+    // Presets and persistence
+
+    private void SavePreset()
+    {
+        var preset = new PatchPreset
+        {
+            Name = NewPresetName.Trim(),
+            LatencyMs = LatencyMs,
+            Nodes = CaptureNodes(),
+            Cables = CaptureCables()
+        };
+
+        var existing = Presets.FirstOrDefault(p => string.Equals(p.Name, preset.Name, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null) Presets[Presets.IndexOf(existing)] = preset;
+        else Presets.Add(preset);
+
+        NewPresetName = string.Empty;
+        Notice = $"Saved \"{preset.Name}\".";
+        Persist();
+    }
+
+    private void LoadPreset(PatchPreset? preset)
+    {
+        if (preset is null) return;
+
+        bool wasRunning = IsRunning;
+        if (wasRunning) StopRouting();
+
+        foreach (var cable in Cables.ToList()) RemoveCable(cable, persist: false);
+        foreach (var node in AllNodes().ToList()) RemoveNode(node);
+
+        LatencyMs = preset.LatencyMs;
+        RestoreWorkspace(preset.Nodes, preset.Cables);
+
+        Notice = $"Loaded \"{preset.Name}\".";
+        Finish();
+
+        if (wasRunning) StartRouting();
+    }
+
+    private void DeletePreset(PatchPreset? preset)
+    {
+        if (preset is null) return;
+        Presets.Remove(preset);
+        Persist();
+    }
+
+    /// <summary>
+    /// Rebuilds the patchbay from saved state. Nodes whose device or program is missing are
+    /// still created: they show as waiting and reconnect on their own when it returns.
+    /// </summary>
+    private void RestoreWorkspace(List<NodeSettings> nodes, List<CableSettings> cables)
+    {
+        bool wasLoading = _loading;
+        _loading = true;
+
+        var byId = new Dictionary<string, PatchNodeViewModel>();
+
+        foreach (var saved in nodes)
+        {
+            PatchNodeViewModel? created = saved.Kind switch
+            {
+                "Destination" => RestoreDestination(saved),
+                "Application" => RestoreApplication(saved),
+                _ => RestoreDeviceSource(saved)
+            };
+
+            if (created is not null) byId[saved.Id] = created;
+        }
+
+        foreach (var cable in cables)
+        {
+            if (!byId.TryGetValue(cable.SourceId, out var source) || source is not SourceNodeViewModel sourceVm) continue;
+            if (!byId.TryGetValue(cable.DestinationId, out var destination) || destination is not DestinationNodeViewModel destinationVm) continue;
+
+            if (!TryConnect(sourceVm, destinationVm)) continue;
+
+            var created = Cables[^1];
+            created.GainDb = cable.GainDb;
+            created.Muted = cable.Muted;
+            created.DelayMs = cable.DelayMs;
+        }
+
+        _loading = wasLoading;
+        OnPropertyChanged(nameof(HasNodes));
+    }
+
+    private PatchNodeViewModel RestoreDeviceSource(NodeSettings saved)
+    {
+        bool loopback = saved.Kind == "DeviceLoopback";
+        var kind = loopback ? AudioSourceKind.Loopback : AudioSourceKind.Capture;
+
+        var device = InputDevices.FirstOrDefault(d => d.Id == saved.DeviceId && d.Kind == kind)
+                     ?? new AudioDeviceInfo(saved.DeviceId, saved.Title, saved.Subtitle, kind, false);
+
+        return AddDeviceSource(device, loopback, saved);
+    }
+
+    private PatchNodeViewModel RestoreApplication(NodeSettings saved)
+    {
+        var running = Applications.FirstOrDefault(a =>
+            string.Equals(a.ExecutableName, saved.ExecutableName, StringComparison.OrdinalIgnoreCase));
+
+        var application = running ?? new AudioApplication(0, saved.ExecutableName, saved.Title, false);
+        return AddApplicationSource(application, saved);
+    }
+
+    private PatchNodeViewModel RestoreDestination(NodeSettings saved)
+    {
+        var device = OutputDevices.FirstOrDefault(d => d.Id == saved.DeviceId)
+                     ?? new AudioDeviceInfo(saved.DeviceId, saved.Title, saved.Subtitle, AudioSourceKind.Render, false);
+
+        return AddDestination(device, saved);
+    }
+
+    private List<NodeSettings> CaptureNodes()
+    {
+        var list = new List<NodeSettings>();
+
+        foreach (var source in Sources)
+        {
+            list.Add(new NodeSettings
+            {
+                Id = source.Id,
+                Kind = source.Kind switch
+                {
+                    SourceKind.DeviceLoopback => "DeviceLoopback",
+                    SourceKind.Application => "Application",
+                    _ => "Device"
+                },
+                Title = source.Title,
+                Subtitle = source.Subtitle,
+                DeviceId = source.DeviceId,
+                ExecutableName = source.ExecutableName,
+                X = source.X,
+                Y = source.Y,
+                GainDb = source.GainDb,
+                Muted = source.Muted
+            });
+        }
+
+        foreach (var destination in Destinations)
+        {
+            list.Add(new NodeSettings
+            {
+                Id = destination.Id,
+                Kind = "Destination",
+                Title = destination.Title,
+                Subtitle = destination.Subtitle,
+                DeviceId = destination.DeviceId,
+                X = destination.X,
+                Y = destination.Y,
+                GainDb = destination.GainDb,
+                Muted = destination.Muted
+            });
+        }
+
+        return list;
+    }
+
+    private List<CableSettings> CaptureCables() =>
+    [
+        .. Cables.Select(c => new CableSettings
+        {
+            Id = c.Id,
+            SourceId = c.Source.Id,
+            DestinationId = c.Destination.Id,
+            GainDb = c.GainDb,
+            Muted = c.Muted,
+            DelayMs = c.DelayMs
+        })
+    ];
+
+    private void Persist()
+    {
+        if (_loading || _disposed) return;
+
+        _settings.LatencyMs = LatencyMs;
+        _settings.Nodes = CaptureNodes();
+        _settings.Cables = CaptureCables();
+        _settings.Presets = [.. Presets];
+        _settings.MidiRoutes = [.. Midi.NamedRoutes().Select(r => new MidiRouteSettings { Input = r.Input, Output = r.Output })];
+
+        _settingsService.Save(_settings);
+    }
+
+    public void SaveNow() => Persist();
+
+    private void OpenSettingsFolder() =>
+        OpenUrl(System.IO.Path.GetDirectoryName(_settingsService.SettingsPath) ?? string.Empty);
+
+    private void OpenUrl(string target)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = target,
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+            Notice = "Windows would not open that.";
+        }
+    }
+
+    private static string NewId() => Guid.NewGuid().ToString("N");
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+
+        Persist();
+        _disposed = true;
+
+        _meterTimer.Stop();
+        _deviceTimer.Stop();
+        _retryTimer.Stop();
+        _noticeTimer.Stop();
+
+        _devices.DevicesChanged -= OnDevicesChanged;
+        _graph.NodeFailed -= OnNodeFailed;
+
+        Midi.Dispose();
+        _graph.Dispose();
+        _devices.Dispose();
+    }
+}

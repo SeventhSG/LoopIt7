@@ -1,0 +1,22 @@
+# Build output
+bin/
+obj/
+publish/
+dist/
+
+# Generated installer artwork (build\make-assets.ps1 regenerates it)
+installer/wizard-large.bmp
+installer/wizard-small.bmp
+
+# Microsoft's driver sample, fetched on demand by driver\scripts\fetch-sample.ps1
+driver/vendor/
+
+# Local tooling
+.vs/
+*.user
+*.suo
+*.userprefs
+
+# OS noise
+Thumbs.db
+desktop.ini

@@ -1,0 +1,329 @@
+<UserControl x:Class="LoopIt7.Views.PatchbayView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:LoopIt7.Controls"
+             xmlns:views="clr-namespace:LoopIt7.Views"
+             xmlns:vm="clr-namespace:LoopIt7.ViewModels">
+
+    <UserControl.Resources>
+        <views:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+
+        <!--
+            The workspace grid. Faint on purpose: it should read as a surface you can put
+            things on, not as a drawing anybody is meant to look at.
+        -->
+        <DrawingBrush x:Key="WorkspaceGrid" TileMode="Tile"
+                      Viewport="0,0,26,26" ViewportUnits="Absolute"
+                      Viewbox="0,0,26,26" ViewboxUnits="Absolute">
+            <DrawingBrush.Drawing>
+                <GeometryDrawing Brush="#221E1A">
+                    <GeometryDrawing.Geometry>
+                        <EllipseGeometry Center="13,13" RadiusX="1" RadiusY="1" />
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+            </DrawingBrush.Drawing>
+        </DrawingBrush>
+
+        <!-- One card shape for both halves of the graph. Ports switch sides on IsSource. -->
+        <DataTemplate x:Key="NodeCard" DataType="{x:Type vm:PatchNodeViewModel}">
+            <Grid Width="268" Height="108">
+                <Border x:Name="Card"
+                        Background="{StaticResource SurfaceBrush}"
+                        BorderBrush="{StaticResource LineBrush}"
+                        BorderThickness="1"
+                        CornerRadius="{StaticResource SurfaceRadius}"
+                        Padding="11,10"
+                        MouseLeftButtonDown="OnNodeMouseDown">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="20" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="4" />
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" Style="{StaticResource Glyph}" FontSize="13"
+                                       Text="{Binding Glyph}" Foreground="{StaticResource AccentBrush}"
+                                       VerticalAlignment="Center" />
+
+                            <TextBlock Grid.Column="1" Text="{Binding Title}" Margin="9,0,6,0"
+                                       FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+
+                            <Button Grid.Column="2" Style="{StaticResource IconButtonDanger}"
+                                    Width="20" Height="20"
+                                    Command="{Binding RemoveCommand}"
+                                    ToolTip="Remove this box">
+                                <TextBlock Style="{StaticResource Glyph}" FontSize="9" Text="&#xE711;"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                            </Button>
+                        </Grid>
+
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,3,0,0">
+                            <TextBlock Style="{StaticResource Caption}" FontSize="11" Text="{Binding Subtitle}"
+                                       MaxWidth="120" />
+                            <TextBlock Style="{StaticResource Caption}" FontSize="11" Text="{Binding FormatText}"
+                                       Margin="8,0,0,0" />
+                            <TextBlock Text="{Binding StatusText}" Margin="8,0,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                        <Setter Property="FontSize" Value="11" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsLive}" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsFaulted}" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+
+                        <Grid Grid.Row="2" VerticalAlignment="Center">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <ToggleButton Grid.Column="0" Style="{StaticResource MuteToggle}"
+                                          Width="28" Height="24"
+                                          IsChecked="{Binding Muted}"
+                                          ToolTip="Mute" />
+
+                            <Slider Grid.Column="1" Style="{StaticResource Fader}" Margin="9,0,9,0"
+                                    Minimum="-60" Maximum="12" Value="{Binding GainDb}" />
+
+                            <TextBlock Grid.Column="2" Style="{StaticResource Numeric}" Width="54"
+                                       FontSize="11" Text="{Binding GainText}" />
+                        </Grid>
+
+                        <controls:LevelMeter Grid.Row="3" Height="4"
+                                             Peak="{Binding Peak}"
+                                             IsActive="{Binding IsAudible}"
+                                             BarBrush="{StaticResource AccentBrush}"
+                                             TrackBrush="{StaticResource SunkenBrush}"
+                                             ClipBrush="{StaticResource DangerBrush}" />
+                    </Grid>
+                </Border>
+
+                <!-- Output port, on the right of a source -->
+                <Ellipse x:Name="OutPort" Width="13" Height="13"
+                         HorizontalAlignment="Right" VerticalAlignment="Center"
+                         Margin="0,0,-7,0"
+                         Fill="{StaticResource SurfaceHiBrush}"
+                         Stroke="{StaticResource AccentBrush}" StrokeThickness="2"
+                         Cursor="Cross"
+                         Visibility="{Binding IsSource, Converter={StaticResource BoolToVisibility}}"
+                         MouseLeftButtonDown="OnPortMouseDown"
+                         ToolTip="Drag from here to an output" />
+
+                <!-- Input port, on the left of a destination -->
+                <Ellipse x:Name="InPort" Width="13" Height="13"
+                         HorizontalAlignment="Left" VerticalAlignment="Center"
+                         Margin="-7,0,0,0"
+                         Fill="{StaticResource SurfaceHiBrush}"
+                         Stroke="{StaticResource AccentBrush}" StrokeThickness="2"
+                         Visibility="{Binding IsSource, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}"
+                         IsHitTestVisible="False" />
+            </Grid>
+
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsFaulted}" Value="True">
+                    <Setter TargetName="Card" Property="BorderBrush" Value="#5A2A22" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsLive}" Value="True">
+                    <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource LineStrongBrush}" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <Style x:Key="NodeContainer" TargetType="ContentPresenter">
+            <Setter Property="Canvas.Left" Value="{Binding X}" />
+            <Setter Property="Canvas.Top" Value="{Binding Y}" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <ScrollViewer x:Name="Scroller"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      Background="{StaticResource TransparentBrush}">
+            <!--
+                Sized by its contents, never smaller than what has been dragged onto it. The
+                ScrollViewer arranges content at the larger of this and the viewport, so an
+                empty patchbay shows no scroll bars at all.
+            -->
+            <Grid x:Name="Surface"
+                  Background="{StaticResource WorkspaceGrid}"
+                  MinWidth="{Binding CanvasWidth}"
+                  MinHeight="{Binding CanvasHeight}"
+                  MouseLeftButtonDown="OnSurfaceMouseDown"
+                  MouseMove="OnSurfaceMouseMove"
+                  MouseLeftButtonUp="OnSurfaceMouseUp"
+                  MouseLeave="OnSurfaceMouseUp">
+
+                <!-- Cables sit under the boxes so a box never hides behind its own wiring. -->
+                <ItemsControl ItemsSource="{Binding Cables}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <Canvas />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Canvas>
+                                <!-- Invisible fat stroke, so a 2 px cable is still clickable. -->
+                                <Path Data="{Binding Geometry}"
+                                      Stroke="{StaticResource TransparentBrush}"
+                                      StrokeThickness="16"
+                                      Cursor="Hand"
+                                      MouseLeftButtonDown="OnCableMouseDown" />
+
+                                <Path x:Name="Wire" Data="{Binding Geometry}"
+                                      Stroke="{StaticResource LineStrongBrush}"
+                                      StrokeThickness="2.5"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      Opacity="{Binding SignalOpacity}"
+                                      IsHitTestVisible="False" />
+                            </Canvas>
+
+                            <DataTemplate.Triggers>
+                                <DataTrigger Binding="{Binding IsAudible}" Value="True">
+                                    <Setter TargetName="Wire" Property="Stroke" Value="{StaticResource AccentBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Muted}" Value="True">
+                                    <Setter TargetName="Wire" Property="Stroke" Value="#4A3D2A" />
+                                    <Setter TargetName="Wire" Property="StrokeDashArray" Value="3 3" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                    <Setter TargetName="Wire" Property="Stroke" Value="{StaticResource TextBrush}" />
+                                    <Setter TargetName="Wire" Property="StrokeThickness" Value="3.5" />
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- The cable being dragged right now -->
+                <Canvas IsHitTestVisible="False">
+                    <Path x:Name="DragWire"
+                          Stroke="{StaticResource AccentBrush}"
+                          StrokeThickness="2.5"
+                          StrokeDashArray="4 3"
+                          StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round"
+                          Visibility="Collapsed" />
+                </Canvas>
+
+                <ItemsControl ItemsSource="{Binding Sources}"
+                              ItemTemplate="{StaticResource NodeCard}"
+                              ItemContainerStyle="{StaticResource NodeContainer}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <Canvas />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+
+                <ItemsControl ItemsSource="{Binding Destinations}"
+                              ItemTemplate="{StaticResource NodeCard}"
+                              ItemContainerStyle="{StaticResource NodeContainer}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <Canvas />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+
+                <!-- Cable inspector, parked on the selected cable -->
+                <Canvas>
+                    <Border x:Name="CableInspector"
+                            Canvas.Left="{Binding SelectedCable.InspectorX}"
+                            Canvas.Top="{Binding SelectedCable.InspectorY}"
+                            Background="{StaticResource SurfaceHiBrush}"
+                            BorderBrush="{StaticResource LineStrongBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource SurfaceRadius}"
+                            Padding="12,10"
+                            Width="252"
+                            DataContext="{Binding SelectedCable}"
+                            Visibility="{Binding DataContext.HasSelectedCable, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource BoolToVisibility}}">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="22" ShadowDepth="5" Direction="270" Color="#000000" Opacity="0.5" />
+                        </Border.Effect>
+                        <StackPanel>
+                            <Grid>
+                                <TextBlock Text="{Binding Description}" FontSize="12" FontWeight="SemiBold"
+                                           TextTrimming="CharacterEllipsis" Margin="0,0,26,0" />
+                                <Button Style="{StaticResource IconButtonDanger}" Width="20" Height="20"
+                                        HorizontalAlignment="Right"
+                                        Command="{Binding RemoveCommand}"
+                                        ToolTip="Unplug this cable">
+                                    <TextBlock Style="{StaticResource Glyph}" FontSize="9" Text="&#xE711;"
+                                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                </Button>
+                            </Grid>
+
+                            <Grid Margin="0,10,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ToggleButton Grid.Column="0" Style="{StaticResource MuteToggle}"
+                                              Width="28" Height="24" IsChecked="{Binding Muted}"
+                                              ToolTip="Mute this cable" />
+                                <Slider Grid.Column="1" Style="{StaticResource Fader}" Margin="9,0,9,0"
+                                        Minimum="-60" Maximum="12" Value="{Binding GainDb}" />
+                                <TextBlock Grid.Column="2" Style="{StaticResource Numeric}" Width="54"
+                                           FontSize="11" Text="{Binding GainText}" />
+                            </Grid>
+
+                            <Grid Margin="0,8,0,0">
+                                <TextBlock Style="{StaticResource Caption}" FontSize="11" Text="Alignment delay"
+                                           VerticalAlignment="Center" />
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <RepeatButton Style="{StaticResource StepButton}" Content="&#xE738;"
+                                                  Click="OnCableDelayDown" />
+                                    <TextBlock Style="{StaticResource Numeric}" Width="44" FontSize="11"
+                                               HorizontalAlignment="Center" Text="{Binding DelayText}" />
+                                    <RepeatButton Style="{StaticResource StepButton}" Content="&#xE710;"
+                                                  Click="OnCableDelayUp" />
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </Canvas>
+            </Grid>
+        </ScrollViewer>
+
+        <!-- Empty state -->
+        <Border Background="{StaticResource TransparentBrush}" IsHitTestVisible="False"
+                Visibility="{Binding HasNodes, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="420">
+                <Canvas Width="20" Height="20" HorizontalAlignment="Center" Opacity="0.5">
+                    <Path Data="{StaticResource MarkStrokes}" Stroke="{StaticResource TextDimBrush}"
+                          StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                    <Path Data="{StaticResource MarkDots}" Fill="{StaticResource TextDimBrush}" />
+                </Canvas>
+                <TextBlock Text="An empty patchbay"
+                           FontFamily="{StaticResource DisplayFont}" FontSize="16" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" Margin="0,14,0,0" />
+                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextAlignment="Center"
+                           Margin="0,8,0,0"
+                           Text="Add a source and an output, then drag a cable between them. A microphone can reach your headphones and the room at once, and Spotify can go to Discord without passing through your mic." />
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

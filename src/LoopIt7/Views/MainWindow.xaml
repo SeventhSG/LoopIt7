@@ -71,15 +71,15 @@
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                    <Button Style="{StaticResource CaptionButton}" Click="OnMinimiseClick" ToolTip="Minimise">
+                    <Button Style="{StaticResource CaptionButton}" Click="OnMinimiseClick" ToolTip="Minimise" AutomationProperties.Name="Minimise">
                         <TextBlock Style="{StaticResource Glyph}" FontSize="10" Text="&#xE921;"
                                    Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                     </Button>
-                    <Button x:Name="MaximiseButton" Style="{StaticResource CaptionButton}" Click="OnMaximiseClick" ToolTip="Maximise">
+                    <Button x:Name="MaximiseButton" Style="{StaticResource CaptionButton}" Click="OnMaximiseClick" ToolTip="Maximise" AutomationProperties.Name="Maximise">
                         <TextBlock x:Name="MaximiseGlyph" Style="{StaticResource Glyph}" FontSize="10" Text="&#xE922;"
                                    Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                     </Button>
-                    <Button Style="{StaticResource CloseButton}" Click="OnCloseClick" ToolTip="Close">
+                    <Button Style="{StaticResource CloseButton}" Click="OnCloseClick" ToolTip="Close" AutomationProperties.Name="Close">
                         <TextBlock Style="{StaticResource Glyph}" FontSize="10" Text="&#xE8BB;"
                                    Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                     </Button>
@@ -118,7 +118,7 @@
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                             Visibility="{Binding IsPatchbayTab, Converter={StaticResource BoolToVisibility}}">
-                    <Button x:Name="AddSourceButton" Style="{StaticResource GhostButton}" Click="OnAddSourceClick"
+                    <Button x:Name="AddSourceButton" Style="{StaticResource GhostButton}" Click="OnAddSourceClick" AutomationProperties.Name="Add source"
                             ToolTip="A microphone, a playback device tapped in loopback, or a single program">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Glyph}" FontSize="11" Text="&#xE710;"
@@ -127,7 +127,8 @@
                         </StackPanel>
                     </Button>
                     <Button x:Name="AddOutputButton" Style="{StaticResource GhostButton}" Margin="6,0,0,0"
-                            Click="OnAddOutputClick" ToolTip="Speakers, headphones, an interface, or a virtual cable">
+                            Click="OnAddOutputClick" AutomationProperties.Name="Add output"
+                            ToolTip="Speakers, headphones, an interface, or a virtual cable">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Glyph}" FontSize="11" Text="&#xE710;"
                                        Foreground="{StaticResource AccentBrush}" />
@@ -135,7 +136,7 @@
                         </StackPanel>
                     </Button>
                     <Button Style="{StaticResource IconButtonDanger}" Margin="6,0,0,0"
-                            Command="{Binding ClearPatchbayCommand}" ToolTip="Clear the patchbay">
+                            Command="{Binding ClearPatchbayCommand}" ToolTip="Clear the patchbay" AutomationProperties.Name="Clear the patchbay">
                         <TextBlock Style="{StaticResource Glyph}" FontSize="12" Text="&#xE74D;"
                                    Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                     </Button>
@@ -172,7 +173,8 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <Button Grid.Column="0" Command="{Binding ToggleRoutingCommand}">
+                    <Button Grid.Column="0" Command="{Binding ToggleRoutingCommand}"
+                            AutomationProperties.Name="{Binding RoutingButtonText}">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource PillButton}">
                                 <Style.Triggers>
@@ -215,6 +217,18 @@
                     </Grid>
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal">
+                        <!-- Only present while something is soloed, which is the only time it means anything. -->
+                        <Button Style="{StaticResource GhostButton}" Height="32" Margin="0,0,12,0"
+                                Command="{Binding ClearSoloCommand}"
+                                Visibility="{Binding IsSoloing, Converter={StaticResource BoolToVisibility}}"
+                                ToolTip="Bring every source back">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="S" FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" />
+                                <TextBlock Text="Clear solo" Margin="8,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+
                         <TextBlock Text="Buffer" Style="{StaticResource Caption}" VerticalAlignment="Center"
                                    Margin="0,0,8,0" />
                         <ComboBox Style="{StaticResource LoopCombo}" Width="92" Height="32"
@@ -229,13 +243,13 @@
                         </ComboBox>
 
                         <Button x:Name="PresetsButton" Style="{StaticResource IconButton}" Margin="8,0,0,0"
-                                Click="OnPresetsClick" ToolTip="Presets">
+                                Click="OnPresetsClick" ToolTip="Presets" AutomationProperties.Name="Presets">
                             <TextBlock Style="{StaticResource Glyph}" Text="&#xE8FD;"
                                        Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                         </Button>
 
                         <Button x:Name="OptionsButton" Style="{StaticResource IconButton}" Margin="2,0,0,0"
-                                Click="OnOptionsClick" ToolTip="Options">
+                                Click="OnOptionsClick" ToolTip="Options" AutomationProperties.Name="Options">
                             <TextBlock Style="{StaticResource Glyph}" Text="&#xE713;"
                                        Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                         </Button>

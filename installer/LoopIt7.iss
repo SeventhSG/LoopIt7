@@ -5,7 +5,7 @@
 ; wizard offers an all users install for anyone who wants one.
 
 #define AppName        "LoopIt7"
-#define AppVersion     "1.0.0"
+#define AppVersion     "1.1.0"
 #define AppPublisher   "SeventhSG"
 #define AppUrl         "https://github.com/SeventhSG/LoopIt7"
 #define AppExeName     "LoopIt7.exe"

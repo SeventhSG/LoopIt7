@@ -24,6 +24,11 @@ public sealed class NodeSettings
     public double Y { get; set; }
     public double GainDb { get; set; }
     public bool Muted { get; set; }
+
+    /// <summary>Stereo balance, -1 hard left to +1 hard right.</summary>
+    public double Pan { get; set; }
+
+    public bool Solo { get; set; }
 }
 
 public sealed class CableSettings

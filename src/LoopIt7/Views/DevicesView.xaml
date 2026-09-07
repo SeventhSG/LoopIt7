@@ -89,6 +89,12 @@
                                             <TextBlock Style="{StaticResource Caption}" Text="{Binding FormatText}" Margin="10,0,0,0"
                                                        FontFamily="{StaticResource MonoFont}" />
                                         </StackPanel>
+
+                                        <!-- Which end of the cable the other program should listen to. -->
+                                        <TextBlock Style="{StaticResource Caption}" Margin="0,5,0,0" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource AccentBrush}"
+                                                   Text="{Binding PickupHint}"
+                                                   Visibility="{Binding HasPickupHint, Converter={StaticResource BoolToVisibility}}" />
                                     </StackPanel>
 
                                     <StackPanel Grid.Column="2" Orientation="Horizontal">

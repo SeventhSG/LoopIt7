@@ -282,6 +282,96 @@
         </Setter>
     </Style>
 
+    <!--
+        Solo. Deliberately not red: muting says "this one off", soloing says "only this one",
+        and the accent is already the colour of a signal that is going somewhere.
+    -->
+    <Style x:Key="SoloToggle" TargetType="ToggleButton">
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="24" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Shell"
+                            Background="{StaticResource SunkenBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource ControlRadius}">
+                        <TextBlock Text="S" FontSize="11" FontWeight="SemiBold"
+                                   FontFamily="{StaticResource UiFont}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{TemplateBinding Foreground}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Shell" Property="BorderBrush" Value="{StaticResource LineStrongBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Shell" Property="Background" Value="{StaticResource AccentSoftBrush}" />
+                            <Setter TargetName="Shell" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Pan. Thinner than a fader and marked at the centre, because centre is the answer most of the time. -->
+    <Style x:Key="PanKnob" TargetType="Thumb">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Thumb">
+                    <Grid Width="12" Height="16" Background="{StaticResource TransparentBrush}">
+                        <Rectangle x:Name="Knob" Width="4" Height="12" RadiusX="2" RadiusY="2"
+                                   Fill="{StaticResource TextDimBrush}" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Knob" Property="Fill" Value="{StaticResource AccentBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsDragging" Value="True">
+                            <Setter TargetName="Knob" Property="Fill" Value="{StaticResource AccentBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="PanSlider" TargetType="Slider">
+        <Setter Property="Height" Value="16" />
+        <Setter Property="IsMoveToPointEnabled" Value="True" />
+        <Setter Property="Minimum" Value="-1" />
+        <Setter Property="Maximum" Value="1" />
+        <Setter Property="SmallChange" Value="0.02" />
+        <Setter Property="LargeChange" Value="0.1" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Slider">
+                    <Grid Background="{StaticResource TransparentBrush}" VerticalAlignment="Center">
+                        <Border Height="3" CornerRadius="1.5" Background="{StaticResource LineBrush}" VerticalAlignment="Center" />
+                        <Rectangle Width="1" Height="7" Fill="{StaticResource LineStrongBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <Track x:Name="PART_Track">
+                            <Track.DecreaseRepeatButton>
+                                <RepeatButton Opacity="0" Focusable="False" Command="Slider.DecreaseLarge" />
+                            </Track.DecreaseRepeatButton>
+                            <Track.Thumb>
+                                <Thumb Style="{StaticResource PanKnob}" />
+                            </Track.Thumb>
+                            <Track.IncreaseRepeatButton>
+                                <RepeatButton Opacity="0" Focusable="False" Command="Slider.IncreaseLarge" />
+                            </Track.IncreaseRepeatButton>
+                        </Track>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Switch, the Windows 11 idiom for a preference. -->
     <Style x:Key="ToggleSwitch" TargetType="CheckBox">
         <Setter Property="Cursor" Value="Hand" />

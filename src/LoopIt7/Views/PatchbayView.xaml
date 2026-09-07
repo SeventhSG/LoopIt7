@@ -26,7 +26,7 @@
 
         <!-- One card shape for both halves of the graph. Ports switch sides on IsSource. -->
         <DataTemplate x:Key="NodeCard" DataType="{x:Type vm:PatchNodeViewModel}">
-            <Grid Width="268" Height="108">
+            <Grid Width="268" Height="132">
                 <Border x:Name="Card"
                         Background="{StaticResource SurfaceBrush}"
                         BorderBrush="{StaticResource LineBrush}"
@@ -39,6 +39,7 @@
                             <RowDefinition Height="20" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="4" />
                         </Grid.RowDefinitions>
 
@@ -55,12 +56,13 @@
 
                             <TextBlock Grid.Column="1" Text="{Binding Title}" Margin="9,0,6,0"
                                        FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
-                                       VerticalAlignment="Center" />
+                                       VerticalAlignment="Center"
+                                       ToolTip="{Binding PickupHint}" />
 
                             <Button Grid.Column="2" Style="{StaticResource IconButtonDanger}"
                                     Width="20" Height="20"
                                     Command="{Binding RemoveCommand}"
-                                    ToolTip="Remove this box">
+                                    ToolTip="Remove this box" AutomationProperties.Name="Remove this box">
                                 <TextBlock Style="{StaticResource Glyph}" FontSize="9" Text="&#xE711;"
                                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                             </Button>
@@ -95,10 +97,16 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
-                            <ToggleButton Grid.Column="0" Style="{StaticResource MuteToggle}"
-                                          Width="28" Height="24"
-                                          IsChecked="{Binding Muted}"
-                                          ToolTip="Mute" />
+                            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                <ToggleButton Style="{StaticResource MuteToggle}"
+                                              Width="28" Height="24"
+                                              IsChecked="{Binding Muted}"
+                                              ToolTip="Mute" AutomationProperties.Name="Mute" />
+                                <ToggleButton Style="{StaticResource SoloToggle}" Margin="4,0,0,0"
+                                              IsChecked="{Binding Solo}"
+                                              Visibility="{Binding SupportsSolo, Converter={StaticResource BoolToVisibility}}"
+                                              ToolTip="Solo. Everything else goes quiet while this is on." AutomationProperties.Name="Solo" />
+                            </StackPanel>
 
                             <Slider Grid.Column="1" Style="{StaticResource Fader}" Margin="9,0,9,0"
                                     Minimum="-60" Maximum="12" Value="{Binding GainDb}" />
@@ -107,7 +115,33 @@
                                        FontSize="11" Text="{Binding GainText}" />
                         </Grid>
 
-                        <controls:LevelMeter Grid.Row="3" Height="4"
+                        <Grid Grid.Row="3" Margin="0,6,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <Slider Grid.Column="0" Style="{StaticResource PanSlider}"
+                                    Value="{Binding Pan}"
+                                    MouseRightButtonUp="OnPanRightClick"
+                                    ToolTip="Stereo balance. Right click to recentre." />
+
+                            <TextBlock Grid.Column="1" Width="38" Margin="8,0,0,0"
+                                       Text="{Binding PanText}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource Numeric}">
+                                        <Setter Property="FontSize" Value="10" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsPanned}" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+
+                        <controls:LevelMeter Grid.Row="4" Height="4"
                                              Peak="{Binding Peak}"
                                              IsActive="{Binding IsAudible}"
                                              BarBrush="{StaticResource AccentBrush}"
@@ -308,10 +342,13 @@
             </Grid>
         </ScrollViewer>
 
-        <!-- Empty state -->
-        <Border Background="{StaticResource TransparentBrush}" IsHitTestVisible="False"
+        <!--
+            Empty state. The two templates build a patch from whatever this machine has,
+            resolved by role, so the first minute is useful on any rig rather than a blank page.
+        -->
+        <Border Background="{StaticResource TransparentBrush}"
                 Visibility="{Binding HasNodes, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}">
-            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="420">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="470">
                 <Canvas Width="20" Height="20" HorizontalAlignment="Center" Opacity="0.5">
                     <Path Data="{StaticResource MarkStrokes}" Stroke="{StaticResource TextDimBrush}"
                           StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
@@ -322,7 +359,30 @@
                            HorizontalAlignment="Center" Margin="0,14,0,0" />
                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextAlignment="Center"
                            Margin="0,8,0,0"
-                           Text="Add a source and an output, then drag a cable between them. A microphone can reach your headphones and the room at once, and Spotify can go to Discord without passing through your mic." />
+                           Text="Add a source and an output, then drag a cable between them. Or start from one of these and change whatever does not fit." />
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
+                    <Button Style="{StaticResource GhostButton}" Height="36" Padding="16,0"
+                            Command="{Binding ApplyTemplateCommand}" CommandParameter="streaming"
+                            AutomationProperties.Name="Streaming setup"
+                            ToolTip="Microphone and desktop audio, to your headphones and to a cable for OBS or Discord">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Glyph}" FontSize="12" Text="&#xE714;"
+                                       Foreground="{StaticResource AccentBrush}" />
+                            <TextBlock Text="Streaming setup" Margin="9,0,0,0" />
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource GhostButton}" Height="36" Padding="16,0" Margin="8,0,0,0"
+                            Command="{Binding ApplyTemplateCommand}" CommandParameter="monitoring"
+                            AutomationProperties.Name="Monitoring setup"
+                            ToolTip="One microphone reaching your headphones and the room at the same time">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Glyph}" FontSize="12" Text="&#xE720;"
+                                       Foreground="{StaticResource AccentBrush}" />
+                            <TextBlock Text="Monitoring setup" Margin="9,0,0,0" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
             </StackPanel>
         </Border>
     </Grid>

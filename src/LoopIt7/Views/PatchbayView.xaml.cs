@@ -130,6 +130,14 @@ public partial class PatchbayView : UserControl
         e.Handled = true;
     }
 
+    /// <summary>Right click recentres a pan control, the way every mixer does it.</summary>
+    private void OnPanRightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: PatchNodeViewModel node }) return;
+        node.Pan = 0;
+        e.Handled = true;
+    }
+
     private void OnCableDelayDown(object sender, RoutedEventArgs e) => StepCableDelay(-1);
 
     private void OnCableDelayUp(object sender, RoutedEventArgs e) => StepCableDelay(+1);

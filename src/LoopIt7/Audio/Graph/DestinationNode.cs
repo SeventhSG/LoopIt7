@@ -52,6 +52,20 @@ internal sealed class DestinationNode : IDisposable
         set { _muted = value; ApplyGain(); }
     }
 
+    private float _pan;
+
+    /// <summary>Balance of the summed mix leaving this endpoint, from -1 to +1.</summary>
+    public float Pan
+    {
+        get => _pan;
+        set
+        {
+            _pan = Math.Clamp(value, -1f, 1f);
+            var gain = _gain;
+            if (gain is not null) gain.Pan = _pan;
+        }
+    }
+
     public float ReadPeak() => _gain?.ReadPeak() ?? 0f;
 
     public event EventHandler<GraphErrorEventArgs>? Failed;
@@ -142,7 +156,10 @@ internal sealed class DestinationNode : IDisposable
     private void ApplyGain()
     {
         var gain = _gain;
-        if (gain is not null) gain.TargetGain = _muted ? 0f : _linearGain;
+        if (gain is null) return;
+
+        gain.TargetGain = _muted ? 0f : _linearGain;
+        gain.Pan = _pan;
     }
 
     private void OnPlaybackStopped(object? sender, StoppedEventArgs e)

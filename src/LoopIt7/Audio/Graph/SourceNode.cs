@@ -18,6 +18,7 @@ internal abstract class SourceNode : IDisposable
     private volatile float _gainTarget = 1f;
     private volatile float _peak;
     private float _rampStep = 0.001f;
+    private float _panCurrent;
 
     protected SourceNode(string id, string displayName)
     {
@@ -50,6 +51,15 @@ internal abstract class SourceNode : IDisposable
 
     public bool Muted { get; set; }
 
+    private volatile float _pan;
+
+    /// <summary>Stereo balance from -1 (hard left) to +1 (hard right).</summary>
+    public float Pan
+    {
+        get => _pan;
+        set => _pan = Math.Clamp(value, -1f, 1f);
+    }
+
     public float ReadPeak()
     {
         float peak = _peak;
@@ -77,6 +87,7 @@ internal abstract class SourceNode : IDisposable
         StereoFormat = stereoFormat;
         _rampStep = 1f / Math.Max(1f, stereoFormat.SampleRate * 0.020f);
         _gainCurrent = Muted ? 0f : _gainTarget;
+        _panCurrent = _pan;
     }
 
     protected void RaiseFailure(string message)
@@ -115,6 +126,8 @@ internal abstract class SourceNode : IDisposable
     {
         float target = Muted ? 0f : _gainTarget;
         float gain = _gainCurrent;
+        float panTarget = _pan;
+        float pan = _panCurrent;
         float step = _rampStep;
         float peak = _peak;
 
@@ -123,8 +136,13 @@ internal abstract class SourceNode : IDisposable
             if (gain < target) gain = Math.Min(target, gain + step);
             else if (gain > target) gain = Math.Max(target, gain - step);
 
-            float left = bus[i] * gain;
-            float right = bus[i + 1] * gain;
+            if (pan < panTarget) pan = Math.Min(panTarget, pan + step);
+            else if (pan > panTarget) pan = Math.Max(panTarget, pan - step);
+
+            SmoothGainSampleProvider.BalanceGains(pan, out float leftTrim, out float rightTrim);
+
+            float left = bus[i] * gain * leftTrim;
+            float right = bus[i + 1] * gain * rightTrim;
             bus[i] = left;
             bus[i + 1] = right;
 
@@ -133,6 +151,7 @@ internal abstract class SourceNode : IDisposable
         }
 
         _gainCurrent = gain;
+        _panCurrent = pan;
         _peak = peak;
     }
 

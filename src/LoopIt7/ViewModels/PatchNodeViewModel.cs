@@ -12,7 +12,7 @@ public abstract class PatchNodeViewModel : ObservableObject
     /// <summary>Fixed so cable endpoints can be computed without measuring the visual tree.</summary>
     public const double NodeWidth = 268;
 
-    public const double NodeHeight = 108;
+    public const double NodeHeight = 132;
 
     /// <summary>Vertical centre of the card, where the ports sit.</summary>
     public const double PortOffsetY = NodeHeight / 2;
@@ -37,6 +37,7 @@ public abstract class PatchNodeViewModel : ObservableObject
 
         RemoveCommand = new RelayCommand(_ => RemoveRequested?.Invoke(this, EventArgs.Empty));
         ResetGainCommand = new RelayCommand(_ => GainDb = 0);
+        ResetPanCommand = new RelayCommand(_ => Pan = 0);
     }
 
     public string Id { get; }
@@ -48,6 +49,7 @@ public abstract class PatchNodeViewModel : ObservableObject
 
     public RelayCommand RemoveCommand { get; }
     public RelayCommand ResetGainCommand { get; }
+    public RelayCommand ResetPanCommand { get; }
 
     public event EventHandler? RemoveRequested;
 
@@ -115,9 +117,80 @@ public abstract class PatchNodeViewModel : ObservableObject
         {
             if (!SetProperty(ref _muted, value)) return;
             OnPropertyChanged(nameof(IsAudible));
+            OnPropertyChanged(nameof(EffectiveMuted));
             MixChanged?.Invoke(this, EventArgs.Empty);
         }
     }
+
+    private double _pan;
+
+    /// <summary>Stereo balance, -1 hard left to +1 hard right.</summary>
+    public double Pan
+    {
+        get => _pan;
+        set
+        {
+            double clamped = Math.Clamp(Math.Round(value, 2), -1, 1);
+
+            // A detent at the centre. Without it, dead centre is almost impossible to hit
+            // with a mouse and every channel ends up a percent or two off.
+            if (Math.Abs(clamped) < 0.04) clamped = 0;
+
+            if (!SetProperty(ref _pan, clamped)) return;
+            OnPropertyChanged(nameof(PanText));
+            OnPropertyChanged(nameof(IsPanned));
+            MixChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public float LinearPan => (float)_pan;
+
+    public bool IsPanned => _pan != 0;
+
+    public string PanText => _pan switch
+    {
+        0 => "C",
+        < 0 => $"L{Math.Abs(_pan) * 100:0}",
+        _ => $"R{_pan * 100:0}"
+    };
+
+    private bool _solo;
+
+    /// <summary>
+    /// Solo is a mixer wide state, not a per node one: the moment anything is soloed,
+    /// everything that is not goes quiet. The main view model owns that arithmetic.
+    /// </summary>
+    public bool Solo
+    {
+        get => _solo;
+        set
+        {
+            if (!SetProperty(ref _solo, value)) return;
+            SoloChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>Only sources can be soloed. An output is where you listen, not what you pick.</summary>
+    public bool SupportsSolo => IsSource;
+
+    private bool _silencedBySolo;
+
+    /// <summary>Set by the mixer when something else is soloed and this is not.</summary>
+    public bool SilencedBySolo
+    {
+        get => _silencedBySolo;
+        set
+        {
+            if (!SetProperty(ref _silencedBySolo, value)) return;
+            OnPropertyChanged(nameof(IsAudible));
+            OnPropertyChanged(nameof(EffectiveMuted));
+        }
+    }
+
+    /// <summary>What the engine is actually told: muted by hand, or silenced by someone else's solo.</summary>
+    public bool EffectiveMuted => _muted || _silencedBySolo;
+
+    public event EventHandler? SoloChanged;
 
     public event EventHandler? MixChanged;
 
@@ -133,7 +206,7 @@ public abstract class PatchNodeViewModel : ObservableObject
         set => SetProperty(ref _isSelected, value);
     }
 
-    public bool IsAudible => !_muted && _status == NodeStatus.Live;
+    public bool IsAudible => !EffectiveMuted && _status == NodeStatus.Live;
 
     public bool IsLive => _status == NodeStatus.Live;
 
@@ -226,6 +299,23 @@ public sealed class DestinationNodeViewModel : PatchNodeViewModel
     /// handing it to another program rather than to a speaker.
     /// </summary>
     public bool IsVirtualCable { get; }
+
+    private string? _pickupHint;
+
+    /// <summary>
+    /// For a cable destination, what the other program should be told to listen to. Null for
+    /// real hardware, where the answer is "your ears".
+    /// </summary>
+    public string? PickupHint
+    {
+        get => _pickupHint;
+        set
+        {
+            if (SetProperty(ref _pickupHint, value)) OnPropertyChanged(nameof(HasPickupHint));
+        }
+    }
+
+    public bool HasPickupHint => !string.IsNullOrEmpty(_pickupHint);
 
     public override bool IsSource => false;
 

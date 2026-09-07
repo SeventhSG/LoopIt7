@@ -218,23 +218,25 @@ public sealed class AudioGraph : IDisposable
 
     // Live control
 
-    public void ConfigureSource(string id, float linearGain, bool muted)
+    public void ConfigureSource(string id, float linearGain, bool muted, float pan = 0f)
     {
         lock (_sync)
         {
             if (!_sources.TryGetValue(id, out var source)) return;
             source.LinearGain = linearGain;
             source.Muted = muted;
+            source.Pan = pan;
         }
     }
 
-    public void ConfigureDestination(string id, float linearGain, bool muted)
+    public void ConfigureDestination(string id, float linearGain, bool muted, float pan = 0f)
     {
         lock (_sync)
         {
             if (!_destinations.TryGetValue(id, out var destination)) return;
             destination.LinearGain = linearGain;
             destination.Muted = muted;
+            destination.Pan = pan;
         }
     }
 

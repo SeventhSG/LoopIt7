@@ -28,7 +28,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private const double LaneSourceX = 48;
     private const double LaneDestinationX = 560;
     private const double LaneTop = 32;
-    private const double LaneSpacing = 128;
+    /// <summary>Card height plus a gap, so auto placed boxes never touch.</summary>
+    private const double LaneSpacing = PatchNodeViewModel.NodeHeight + 26;
 
     private readonly Dispatcher _dispatcher;
     private readonly DeviceService _devices;
@@ -71,6 +72,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RefreshApplicationsCommand = new RelayCommand(_ => RefreshApplications());
         RefreshDevicesCommand = new RelayCommand(_ => { RefreshDevices(); RebuildDeviceRows(); });
         ClearPatchbayCommand = new RelayCommand(_ => ClearPatchbay());
+        ClearSoloCommand = new RelayCommand(_ => ClearSolo());
+        ApplyTemplateCommand = new RelayCommand(p => ApplyTemplate(p as string ?? "monitoring"));
         SavePresetCommand = new RelayCommand(_ => SavePreset(), _ => CanSavePreset);
         LoadPresetCommand = new RelayCommand(p => LoadPreset(p as PatchPreset));
         DeletePresetCommand = new RelayCommand(p => DeletePreset(p as PatchPreset));
@@ -147,6 +150,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand RefreshApplicationsCommand { get; }
     public RelayCommand RefreshDevicesCommand { get; }
     public RelayCommand ClearPatchbayCommand { get; }
+    public RelayCommand ClearSoloCommand { get; }
+    public RelayCommand ApplyTemplateCommand { get; }
     public RelayCommand SavePresetCommand { get; }
     public RelayCommand LoadPresetCommand { get; }
     public RelayCommand DeletePresetCommand { get; }
@@ -443,7 +448,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         Sources.Add(vm);
         _graph.AddDeviceSource(vm.Id, title, device.Id, loopback);
-        _graph.ConfigureSource(vm.Id, vm.LinearGain, vm.Muted);
+        PushMix(vm);
 
         Finish();
         return vm;
@@ -461,7 +466,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         Sources.Add(vm);
         _graph.AddApplicationSource(vm.Id, title, application.ProcessId, application.ExecutableName);
-        _graph.ConfigureSource(vm.Id, vm.LinearGain, vm.Muted);
+        PushMix(vm);
 
         Finish();
         return vm;
@@ -473,13 +478,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         string title = saved?.Title ?? device.Name;
         string subtitle = saved?.Subtitle ?? (VirtualCableService.FamilyOf(device) ?? device.InterfaceName);
 
-        var vm = new DestinationNodeViewModel(saved?.Id ?? NewId(), title, subtitle, device.Id, virtualCable);
+        var vm = new DestinationNodeViewModel(saved?.Id ?? NewId(), title, subtitle, device.Id, virtualCable)
+        {
+            PickupHint = VirtualCableService.DescribePickup(device, InputDevices)
+        };
         PlaceNode(vm, saved, LaneDestinationX, Destinations.Count);
         WireNode(vm);
 
         Destinations.Add(vm);
         _graph.AddDestination(vm.Id, title, device.Id);
-        _graph.ConfigureDestination(vm.Id, vm.LinearGain, vm.Muted);
+        PushMix(vm);
 
         Finish();
         return vm;
@@ -493,6 +501,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             node.Y = saved.Y;
             node.GainDb = saved.GainDb;
             node.Muted = saved.Muted;
+            node.Pan = saved.Pan;
+            node.Solo = saved.Solo;
             return;
         }
 
@@ -504,6 +514,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         node.RemoveRequested += (_, _) => RemoveNode(node);
         node.MixChanged += (_, _) => OnNodeMixChanged(node);
+        node.SoloChanged += (_, _) => ApplySolo();
         node.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName is not (nameof(PatchNodeViewModel.X) or nameof(PatchNodeViewModel.Y))) return;
@@ -548,10 +559,41 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void OnNodeMixChanged(PatchNodeViewModel node)
     {
-        if (node.IsSource) _graph.ConfigureSource(node.Id, node.LinearGain, node.Muted);
-        else _graph.ConfigureDestination(node.Id, node.LinearGain, node.Muted);
-
+        PushMix(node);
         Persist();
+    }
+
+    private void PushMix(PatchNodeViewModel node)
+    {
+        if (node.IsSource) _graph.ConfigureSource(node.Id, node.LinearGain, node.EffectiveMuted, node.LinearPan);
+        else _graph.ConfigureDestination(node.Id, node.LinearGain, node.EffectiveMuted, node.LinearPan);
+    }
+
+    /// <summary>
+    /// Solo is a property of the whole mixer, not of one channel. The moment any source is
+    /// soloed every other source goes quiet, and lifting the last solo brings them all back.
+    /// </summary>
+    private void ApplySolo()
+    {
+        bool anySolo = Sources.Any(s => s.Solo);
+
+        foreach (var source in Sources)
+        {
+            source.SilencedBySolo = anySolo && !source.Solo;
+            PushMix(source);
+        }
+
+        OnPropertyChanged(nameof(IsSoloing));
+        if (!_loading) Persist();
+    }
+
+    /// <summary>True while at least one source is soloed, so the interface can say so.</summary>
+    public bool IsSoloing => Sources.Any(s => s.Solo);
+
+    /// <summary>Clears every solo. Reachable from the transport when soloing is active.</summary>
+    public void ClearSolo()
+    {
+        foreach (var source in Sources) source.Solo = false;
     }
 
     public void RemoveNode(PatchNodeViewModel node)
@@ -576,6 +618,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public bool TryConnect(SourceNodeViewModel source, DestinationNodeViewModel destination)
     {
         if (Cables.Any(c => c.Source == source && c.Destination == destination)) return false;
+
+        // Tapping a device and feeding it straight back is a feedback loop. It builds to full
+        // scale in under a second, and it does that in somebody's headphones, so it is refused
+        // rather than warned about.
+        if (source.Kind == SourceKind.DeviceLoopback && source.DeviceId == destination.DeviceId)
+        {
+            Notice = $"That would feed {destination.Title} back into itself. You are already hearing this audio there.";
+            return false;
+        }
 
         string id = NewId();
         if (!_graph.Connect(id, source.Id, destination.Id)) return false;
@@ -602,6 +653,97 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         cable.Dispose();
 
         if (persist) Finish();
+    }
+
+    /// <summary>
+    /// Builds a starting patch out of whatever this machine happens to have. Everything is
+    /// resolved by role at the moment the template runs, never by a stored device id, so the
+    /// same two buttons make sense on a laptop with one headset and on a rig with an interface.
+    /// </summary>
+    public void ApplyTemplate(string kind)
+    {
+        var microphone = CaptureDevices.FirstOrDefault(d => d.IsSystemDefault) ?? CaptureDevices.FirstOrDefault();
+        var systemAudio = LoopbackDevices.FirstOrDefault(d => d.IsSystemDefault) ?? LoopbackDevices.FirstOrDefault();
+        var primaryOutput = OutputDevices.FirstOrDefault(d => d.IsSystemDefault && !VirtualCableService.IsVirtual(d))
+                            ?? OutputDevices.FirstOrDefault(d => !VirtualCableService.IsVirtual(d));
+
+        if (microphone is null || primaryOutput is null)
+        {
+            Notice = "This machine does not have both an input and an output to work with.";
+            return;
+        }
+
+        bool wasRunning = IsRunning;
+        if (wasRunning) StopRouting();
+
+        foreach (var cable in Cables.ToList()) RemoveCable(cable, persist: false);
+        foreach (var node in AllNodes().ToList()) RemoveNode(node);
+
+        if (kind == "streaming") BuildStreamingTemplate(microphone, systemAudio, primaryOutput);
+        else BuildMonitoringTemplate(microphone, primaryOutput);
+
+        Finish();
+        if (wasRunning) StartRouting();
+    }
+
+    /// <summary>
+    /// Mic and everything the machine is playing, into your own ears and into a cable for the
+    /// broadcast software. The cable is the part that lets the stream hear a mix that is not
+    /// simply your microphone.
+    /// </summary>
+    private void BuildStreamingTemplate(AudioDeviceInfo microphone, AudioDeviceInfo? systemAudio, AudioDeviceInfo primaryOutput)
+    {
+        var mic = AddDeviceSource(microphone, loopback: false);
+        var monitor = AddDestination(primaryOutput);
+        TryConnect(mic, monitor);
+
+        SourceNodeViewModel? desktop = null;
+        if (systemAudio is not null)
+        {
+            desktop = AddDeviceSource(systemAudio, loopback: true);
+
+            // Only monitor the desktop tap when it comes from a different device. Tapping the
+            // output you are listening on and returning it there is a feedback loop, and you
+            // can already hear that audio anyway.
+            if (systemAudio.Id != primaryOutput.Id) TryConnect(desktop, monitor);
+        }
+
+        var cable = OutputDevices.FirstOrDefault(VirtualCableService.IsVirtual);
+        if (cable is not null)
+        {
+            var broadcast = AddDestination(cable);
+            TryConnect(mic, broadcast);
+            if (desktop is not null) TryConnect(desktop, broadcast);
+
+            Notice = broadcast.PickupHint ?? "Broadcast send ready.";
+        }
+        else
+        {
+            Notice = $"No software cable is installed, so there is nowhere to send the broadcast mix. {RecommendedCableName} is free.";
+        }
+    }
+
+    /// <summary>
+    /// One microphone reaching two places at once: your headphones and whatever else is in the
+    /// room. The second send carries an alignment delay, because the far speaker usually needs it.
+    /// </summary>
+    private void BuildMonitoringTemplate(AudioDeviceInfo microphone, AudioDeviceInfo primaryOutput)
+    {
+        var mic = AddDeviceSource(microphone, loopback: false);
+        var headphones = AddDestination(primaryOutput);
+        TryConnect(mic, headphones);
+
+        var second = OutputDevices.FirstOrDefault(d => d.Id != primaryOutput.Id && !VirtualCableService.IsVirtual(d));
+        if (second is not null)
+        {
+            var room = AddDestination(second);
+            TryConnect(mic, room);
+            Notice = "Two sends from one microphone. Click the second cable to set its alignment delay.";
+        }
+        else
+        {
+            Notice = "Only one output on this machine, so there is one send. Add another output to fan out.";
+        }
     }
 
     private void ClearPatchbay()
@@ -656,12 +798,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // Outputs first: that is the half people come here to change.
         foreach (var device in OutputDevices)
         {
-            DeviceRows.Add(new DeviceRowViewModel(device, _devices, OnDeviceRowChanged));
+            DeviceRows.Add(new DeviceRowViewModel(device, _devices, OnDeviceRowChanged, InputDevices));
         }
 
         foreach (var device in InputDevices.Where(d => d.Kind == AudioSourceKind.Capture))
         {
-            DeviceRows.Add(new DeviceRowViewModel(device, _devices, OnDeviceRowChanged));
+            DeviceRows.Add(new DeviceRowViewModel(device, _devices, OnDeviceRowChanged, InputDevices));
         }
     }
 
@@ -899,7 +1041,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 X = source.X,
                 Y = source.Y,
                 GainDb = source.GainDb,
-                Muted = source.Muted
+                Muted = source.Muted,
+                Pan = source.Pan,
+                Solo = source.Solo
             });
         }
 
@@ -915,7 +1059,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 X = destination.X,
                 Y = destination.Y,
                 GainDb = destination.GainDb,
-                Muted = destination.Muted
+                Muted = destination.Muted,
+                Pan = destination.Pan
             });
         }
 

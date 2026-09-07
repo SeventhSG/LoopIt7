@@ -4,7 +4,7 @@
   A patchbay for Windows audio. Every source, every output, and the cables
   in between.
 
-  Version 1.0.0
+  Version 1.1.0
   Built by SeventhSG
   https://github.com/SeventhSG/LoopIt7
 
@@ -27,14 +27,51 @@ which cable is carrying what.
 GETTING STARTED
 -------------------------------------------------------------------------------
 
-  1. Open LoopIt7.
-  2. Press "Add source" and pick a microphone, a playback device to tap, or a
+The fastest way in: an empty patchbay offers two starting points.
+
+  STREAMING SETUP    Your microphone and your desktop audio, into your own
+                     headphones and into a cable for OBS, Discord or Zoom.
+
+  MONITORING SETUP   One microphone reaching your headphones and the room at
+                     the same time.
+
+Both are built from whatever this machine has, so they land somewhere sensible
+on any rig. Change whatever does not fit.
+
+To build one by hand:
+
+  1. Press "Add source" and pick a microphone, a playback device to tap, or a
      running program.
-  3. Press "Add output" and pick where it should land.
-  4. Drag from the circle on the right of the source to the output box.
-  5. Press "Start routing".
+  2. Press "Add output" and pick where it should land.
+  3. Drag from the circle on the right of the source to the output box.
+  4. Press "Start routing".
 
 Drag the boxes anywhere you like. The layout is saved with your setup.
+
+
+THE MIXER
+-------------------------------------------------------------------------------
+
+Every source and every output has:
+
+  Fader     -60 dB to +12 dB.
+  Mute      The speaker button.
+  Solo      The S button, on sources. Everything else drops while it is on.
+            "Clear solo" appears next to the transport while soloing.
+  Balance   The thin slider underneath. Right click to recentre.
+  Meter     Peak with a hold marker. It turns red when the signal clips.
+
+One source can feed many outputs. One output sums every source patched into it.
+
+
+A NOTE ON FEEDBACK
+-------------------------------------------------------------------------------
+
+Tapping a playback device and sending it back to that same device is a feedback
+loop. It reaches full scale in under a second, and it does that in whatever you
+are wearing. LoopIt7 refuses that connection rather than warning about it.
+
+When you are trying an unfamiliar routing, turn your output down first anyway.
 
 
 THE THREE WORKSPACES

@@ -19,11 +19,16 @@ public sealed class DeviceRowViewModel : ObservableObject
     private int _selectedBitDepth = 24;
     private string? _message;
 
-    public DeviceRowViewModel(AudioDeviceInfo device, DeviceService devices, Action refreshRequested)
+    public DeviceRowViewModel(
+        AudioDeviceInfo device,
+        DeviceService devices,
+        Action refreshRequested,
+        IEnumerable<AudioDeviceInfo> captureDevices)
     {
         _device = device;
         _devices = devices;
         _refreshRequested = refreshRequested;
+        PickupHint = VirtualCableService.DescribePickup(device, captureDevices);
 
         _selectedSampleRate = device.SampleRate > 0 ? device.SampleRate : 48000;
         if (device.BitDepth is 16 or 24 or 32) _selectedBitDepth = device.BitDepth;
@@ -63,6 +68,11 @@ public sealed class DeviceRowViewModel : ObservableObject
     public string? VirtualFamily => VirtualCableService.FamilyOf(_device);
 
     public bool IsVirtual => VirtualFamily is not null;
+
+    /// <summary>What to select in the other program once audio is sent to this cable.</summary>
+    public string? PickupHint { get; }
+
+    public bool HasPickupHint => !string.IsNullOrEmpty(PickupHint);
 
     public ObservableCollection<int> SampleRates { get; } = [];
 

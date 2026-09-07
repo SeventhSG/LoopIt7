@@ -45,6 +45,16 @@ labelled, so you can tell a real speaker from a pipe to another program.
 its own trim, mute and alignment delay, because the speaker across the room is further away
 than the one on your desk.
 
+**A real mixer.** Every source and every output has a fader, a mute, a stereo balance and a
+live meter. Sources can be soloed, and soloing anything drops everything else, the way a
+mixing desk does it. Patching a device's own loopback back into that device is refused
+outright, because that is a feedback loop and it arrives in somebody's headphones.
+
+**Two starting points.** An empty patchbay offers a **Streaming setup** and a **Monitoring
+setup**. Both are built from whatever the machine has, resolved by role at the moment you
+press them, so they land somewhere sensible on a laptop with one headset and on a rig with an
+interface. Then you change whatever does not fit.
+
 | Workspace | What lives there |
 | --- | --- |
 | **Patchbay** | The canvas. Boxes you drag, ports you pull cables from, meters that move. |
@@ -79,6 +89,16 @@ without asking you to install anything:
 The one thing a cable is genuinely needed for is handing a **mix** back to another program as
 if it were a microphone. For that, LoopIt7 uses whatever cable is already on your machine, and
 points you at [VB-Audio's free one](https://vb-audio.com/Cable/) if there is none.
+
+A cable has two ends and Windows never says which belongs to which, which is the quietest way
+a routing setup fails. LoopIt7 pairs them for you and says so in plain words: send audio to
+this output, then choose *that* input in OBS or Discord. It is on the destination box and in
+the Devices list.
+
+You may see community virtual audio drivers advertised as signed. Check what signed means
+before you rely on one: a kernel driver has to carry a **Microsoft** attestation signature,
+and an ordinary code signing certificate, however legitimate, will still be refused by the
+loader with error 52.
 
 Work towards a LoopIt7 cable of our own lives in [`driver/`](driver/README.md), along with a
 plain account of what it needs: a WDK, test signing for development, and Microsoft attestation

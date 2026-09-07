@@ -1,0 +1,53 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build src/LoopIt7/LoopIt7.csproj -c Release --nologo
+
+      - name: Publish
+        run: dotnet publish src/LoopIt7/LoopIt7.csproj -c Release -r win-x64 --self-contained false -o publish --nologo
+
+      # The icon and the installer artwork are drawn from geometry rather than committed
+      # as binaries, so the build has to draw them before Inno Setup can pick them up.
+      - name: Draw artwork
+        run: powershell -ExecutionPolicy Bypass -File build/make-assets.ps1
+
+      - name: Build the installer
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          $iscc = Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe","${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          & $iscc.FullName /Qp installer/LoopIt7.iss
+        shell: pwsh
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: LoopIt7-Setup
+          path: dist/*.exe
+
+      - name: Attach the installer to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          generate_release_notes: true

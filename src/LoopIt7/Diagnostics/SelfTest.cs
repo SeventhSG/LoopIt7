@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using LoopIt7.Audio.Graph;
 using LoopIt7.Audio.Interop;
 using NAudio.CoreAudioApi;
 using NAudio.CoreAudioApi.Interfaces;
@@ -20,6 +21,9 @@ public static class SelfTest
         report.AppendLine($"LoopIt7 self test  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         report.AppendLine($"Windows build {Environment.OSVersion.Version}");
         report.AppendLine($"Process loopback supported: {ProcessLoopbackCapture.IsSupported}");
+        report.AppendLine();
+
+        report.AppendLine(CheckVirtualOutput());
         report.AppendLine();
 
         var sessions = FindPlayingProcesses(report);
@@ -44,6 +48,96 @@ public static class SelfTest
 
         return report.ToString();
     }
+
+    /// <summary>
+    /// Runs a virtual output on its own for a second and reports what came out of it. No
+    /// device is opened and nothing is played: this is the box's own clock and its own mixer,
+    /// measured against the wall clock, which is the part that has nothing else to lean on.
+    /// </summary>
+    private static string CheckVirtualOutput()
+    {
+        const int seconds = 2;
+        const float level = 0.5f;
+
+        var format = WaveFormat.CreateIeeeFloatWaveFormat(BusNode.BusSampleRate, 2);
+        var bus = new BusNode("self-test", "Self test");
+        var incoming = new Connection("in", "source", "self-test", format);
+        var outgoing = new Connection("out", "self-test", "sink", format);
+
+        bus.SetIncoming([incoming]);
+        bus.SetConnections([outgoing]);
+
+        // A tenth of a second of steady tone, written in over and over. Constant rather than a
+        // sine because what is being measured is the path, not the waveform.
+        int framesPerWrite = BusNode.BusSampleRate / 10;
+        var block = new byte[framesPerWrite * 8];
+        for (int i = 0; i < framesPerWrite * 2; i++)
+        {
+            BitConverter.GetBytes(level).CopyTo(block, i * 4);
+        }
+
+        var tail = outgoing.CreateTail(BusNode.BusSampleRate);
+        var scratch = new float[framesPerWrite * 2];
+
+        float peak = 0;
+        long framesRead = 0;
+
+        try
+        {
+            bus.Start(out string? error);
+            if (error is not null) return $"virtual output failed to start: {error}";
+
+            var clock = Stopwatch.StartNew();
+            while (clock.Elapsed.TotalSeconds < seconds)
+            {
+                incoming.Write(block, block.Length, 100);
+
+                int read = tail.Read(scratch, 0, scratch.Length);
+                framesRead += read / 2;
+                for (int i = 0; i < read; i++)
+                {
+                    float magnitude = Math.Abs(scratch[i]);
+                    if (magnitude > peak) peak = magnitude;
+                }
+
+                Thread.Sleep(20);
+            }
+
+            long rendered = bus.RenderedFrames;
+            double elapsed = clock.Elapsed.TotalSeconds;
+            double expected = BusNode.BusSampleRate * elapsed;
+
+            // The pump renders in whole blocks, so at any instant it is legitimately up to one
+            // block short of the wall clock. Anything beyond that is real drift.
+            double behindMs = (expected - rendered) / BusNode.BusSampleRate * 1000.0;
+            int blockMs = bus.BlockMilliseconds;
+
+            return $"--- virtual output ---\n" +
+                   $"rendered {rendered:N0} frames in {elapsed:0.000}s, expected roughly {expected:N0}\n" +
+                   $"{behindMs:0.0} ms behind the wall clock, against a {blockMs} ms render block\n" +
+                   $"read back {framesRead:N0} frames, peak {peak:0.0000} against {level:0.0000} in\n" +
+                   $"verdict: {Verdict(behindMs, blockMs, peak)}";
+        }
+        catch (Exception ex)
+        {
+            return $"virtual output check threw: {ex.Message}";
+        }
+        finally
+        {
+            bus.Dispose();
+            incoming.Dispose();
+            outgoing.Dispose();
+        }
+    }
+
+    private static string Verdict(double behindMs, int blockMs, float peak) =>
+        (behindMs > -2 && behindMs < blockMs + 2, peak > 0.01f) switch
+        {
+            (true, true) => "the box keeps time and passes signal",
+            (true, false) => "clock is right but nothing came through the mixer",
+            (false, true) => "signal is passing but the clock is drifting",
+            _ => "neither the clock nor the signal is right"
+        };
 
     private static List<(int ProcessId, string Name)> FindPlayingProcesses(StringBuilder report)
     {

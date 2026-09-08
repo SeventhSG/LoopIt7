@@ -15,9 +15,9 @@
     <ApplicationIcon>Assets\LoopIt7.ico</ApplicationIcon>
     <AssemblyName>LoopIt7</AssemblyName>
     <RootNamespace>LoopIt7</RootNamespace>
-    <Version>1.1.0</Version>
-    <FileVersion>1.1.0.0</FileVersion>
-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <Version>1.2.0</Version>
+    <FileVersion>1.2.0.0</FileVersion>
+    <AssemblyVersion>1.2.0.0</AssemblyVersion>
     <Product>LoopIt7</Product>
     <Company>SeventhSG</Company>
     <Copyright>Copyright (c) 2026 SeventhSG</Copyright>

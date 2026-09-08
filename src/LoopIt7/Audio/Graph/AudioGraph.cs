@@ -16,6 +16,13 @@ public sealed class AudioGraph : IDisposable
     private readonly object _sync = new();
     private readonly Dictionary<string, SourceNode> _sources = [];
     private readonly Dictionary<string, DestinationNode> _destinations = [];
+
+    /// <summary>
+    /// Virtual outputs. Each one is registered in <see cref="_sources"/> as well, because a
+    /// virtual output is genuinely both: cables end at it and cables start from it.
+    /// </summary>
+    private readonly Dictionary<string, BusNode> _buses = [];
+
     private readonly Dictionary<string, Connection> _connections = [];
 
     private bool _disposed;
@@ -68,6 +75,29 @@ public sealed class AudioGraph : IDisposable
         }
     }
 
+    /// <summary>
+    /// Adds a virtual output: a named box that takes cables in and sends the sum out again.
+    /// It lands in both halves of the graph, which is the whole point of it.
+    /// </summary>
+    public void AddVirtualOutput(string id, string displayName)
+    {
+        lock (_sync)
+        {
+            RemoveNodeCore(id);
+            var node = new BusNode(id, displayName)
+            {
+                BlockMilliseconds = BufferMilliseconds,
+                TargetQueueMilliseconds = TargetQueue
+            };
+
+            node.Failed += OnNodeFailed;
+            _sources[id] = node;
+            _buses[id] = node;
+
+            if (IsRunning) StartSource(node);
+        }
+    }
+
     public void AddDestination(string id, string displayName, string deviceId)
     {
         lock (_sync)
@@ -102,15 +132,20 @@ public sealed class AudioGraph : IDisposable
         lock (_sync)
         {
             if (!_sources.TryGetValue(sourceId, out var source)) return false;
-            if (!_destinations.TryGetValue(destinationId, out var destination)) return false;
+            if (!HasSink(destinationId)) return false;
 
             // One cable per pair. Patching the same pair twice would just double its level.
             if (_connections.Values.Any(c => c.SourceId == sourceId && c.DestinationId == destinationId)) return false;
 
+            // Virtual outputs can be chained, so the graph can now be asked to eat its own
+            // tail. That is a feedback loop with no air in the middle of it at all, so it is
+            // refused here as well as in the interface.
+            if (CreatesLoop(sourceId, destinationId)) return false;
+
             _connections[connectionId] = new Connection(connectionId, sourceId, destinationId, source.StereoFormat);
 
             RewireSource(source);
-            RewireDestination(destination);
+            RewireSink(destinationId);
             return true;
         }
     }
@@ -122,7 +157,7 @@ public sealed class AudioGraph : IDisposable
             if (!_connections.Remove(connectionId, out var connection)) return;
 
             if (_sources.TryGetValue(connection.SourceId, out var source)) RewireSource(source);
-            if (_destinations.TryGetValue(connection.DestinationId, out var destination)) RewireDestination(destination);
+            RewireSink(connection.DestinationId);
 
             connection.Dispose();
         }
@@ -151,6 +186,7 @@ public sealed class AudioGraph : IDisposable
             foreach (var source in _sources.Values)
             {
                 if (source is DeviceSourceNode device) device.BufferMilliseconds = BufferMilliseconds;
+                if (source is BusNode bus) bus.BlockMilliseconds = BufferMilliseconds;
                 source.TargetQueueMilliseconds = TargetQueue;
                 source.Start(out _);
             }
@@ -166,6 +202,10 @@ public sealed class AudioGraph : IDisposable
             }
 
             foreach (var source in _sources.Values) RewireSource(source);
+
+            // Virtual outputs first: a real endpoint fed by one should find it already summing
+            // rather than open onto silence and catch up a buffer later.
+            foreach (var bus in _buses.Values) RewireSink(bus.Id);
 
             foreach (var destination in _destinations.Values)
             {
@@ -335,7 +375,7 @@ public sealed class AudioGraph : IDisposable
 
         foreach (var destinationId in ConnectionsFrom(source.Id).Select(c => c.DestinationId).Distinct())
         {
-            if (_destinations.TryGetValue(destinationId, out var destination)) RewireDestination(destination);
+            RewireSink(destinationId);
         }
 
         return true;
@@ -350,6 +390,51 @@ public sealed class AudioGraph : IDisposable
     private void RewireDestination(DestinationNode destination) =>
         destination.SetConnections(_connections.Values.Where(c => c.DestinationId == destination.Id));
 
+    /// <summary>True when a cable can end at this id: a real endpoint or a virtual output.</summary>
+    private bool HasSink(string id) => _destinations.ContainsKey(id) || _buses.ContainsKey(id);
+
+    private void RewireSink(string id)
+    {
+        if (_destinations.TryGetValue(id, out var destination))
+        {
+            RewireDestination(destination);
+            return;
+        }
+
+        if (_buses.TryGetValue(id, out var bus))
+        {
+            bus.SetIncoming(_connections.Values.Where(c => c.DestinationId == bus.Id));
+        }
+    }
+
+    /// <summary>
+    /// True when patching this pair would let audio arrive back where it started. Only a
+    /// virtual output passes on what it receives, so the walk stops at anything else.
+    /// </summary>
+    private bool CreatesLoop(string sourceId, string destinationId)
+    {
+        if (sourceId == destinationId) return true;
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Queue<string>();
+        pending.Enqueue(destinationId);
+
+        while (pending.Count > 0)
+        {
+            string nodeId = pending.Dequeue();
+            if (!seen.Add(nodeId)) continue;
+            if (!_buses.ContainsKey(nodeId)) continue;
+
+            foreach (var connection in _connections.Values.Where(c => c.SourceId == nodeId))
+            {
+                if (connection.DestinationId == sourceId) return true;
+                pending.Enqueue(connection.DestinationId);
+            }
+        }
+
+        return false;
+    }
+
     private void RemoveNodeCore(string nodeId)
     {
         foreach (var connection in _connections.Values
@@ -360,9 +445,11 @@ public sealed class AudioGraph : IDisposable
             if (!_connections.Remove(connection, out var removed)) continue;
 
             if (_sources.TryGetValue(removed.SourceId, out var peerSource)) RewireSource(peerSource);
-            if (_destinations.TryGetValue(removed.DestinationId, out var peerDestination)) RewireDestination(peerDestination);
+            RewireSink(removed.DestinationId);
             removed.Dispose();
         }
+
+        _buses.Remove(nodeId);
 
         if (_sources.Remove(nodeId, out var source))
         {
@@ -411,6 +498,7 @@ public sealed class AudioGraph : IDisposable
 
             _sources.Clear();
             _destinations.Clear();
+            _buses.Clear();
             _connections.Clear();
         }
     }

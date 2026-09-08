@@ -26,7 +26,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(3);
 
     private const double LaneSourceX = 48;
-    private const double LaneDestinationX = 560;
+
+    /// <summary>Virtual outputs sit between the two lanes, because that is what they are.</summary>
+    private const double LaneVirtualX = 356;
+
+    private const double LaneDestinationX = 664;
     private const double LaneTop = 32;
     /// <summary>Card height plus a gap, so auto placed boxes never touch.</summary>
     private const double LaneSpacing = PatchNodeViewModel.NodeHeight + 26;
@@ -52,6 +56,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _newPresetName = string.Empty;
     private CableViewModel? _selectedCable;
     private int _liveNodeCount;
+    private string _newVirtualOutputName = string.Empty;
+
+    /// <summary>
+    /// Programs we have muted in the Windows volume mixer, and the process id we muted, so
+    /// every one of them can be handed back no matter how the app is closed.
+    /// </summary>
+    private readonly Dictionary<string, int> _silencedApps = [];
 
     public MainViewModel(Dispatcher dispatcher)
     {
@@ -69,6 +80,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ToggleRoutingCommand = new RelayCommand(_ => ToggleRouting());
         AddSourceCommand = new RelayCommand(AddSourceFromDescriptor);
         AddDestinationCommand = new RelayCommand(AddDestinationFromDescriptor);
+        CreateVirtualOutputCommand = new RelayCommand(_ => CreateVirtualOutput(), _ => CanCreateVirtualOutput);
         RefreshApplicationsCommand = new RelayCommand(_ => RefreshApplications());
         RefreshDevicesCommand = new RelayCommand(_ => { RefreshDevices(); RebuildDeviceRows(); });
         ClearPatchbayCommand = new RelayCommand(_ => ClearPatchbay());
@@ -101,7 +113,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _deviceTimer.Tick += OnDeviceSettleTick;
 
         _retryTimer = new DispatcherTimer { Interval = RetryInterval };
-        _retryTimer.Tick += (_, _) => _graph.RetryPending();
+        _retryTimer.Tick += OnRetryTick;
 
         _noticeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
         _noticeTimer.Tick += (_, _) => { _noticeTimer.Stop(); Notice = null; };
@@ -121,6 +133,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     // Collections
 
     public ObservableCollection<SourceNodeViewModel> Sources { get; } = [];
+
+    /// <summary>The virtual outputs: boxes that take cables in and send the sum out again.</summary>
+    public ObservableCollection<VirtualOutputNodeViewModel> VirtualOutputs { get; } = [];
+
     public ObservableCollection<DestinationNodeViewModel> Destinations { get; } = [];
     public ObservableCollection<CableViewModel> Cables { get; } = [];
     public ObservableCollection<PatchPreset> Presets { get; } = [];
@@ -147,6 +163,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand ToggleRoutingCommand { get; }
     public RelayCommand AddSourceCommand { get; }
     public RelayCommand AddDestinationCommand { get; }
+    public RelayCommand CreateVirtualOutputCommand { get; }
     public RelayCommand RefreshApplicationsCommand { get; }
     public RelayCommand RefreshDevicesCommand { get; }
     public RelayCommand ClearPatchbayCommand { get; }
@@ -197,7 +214,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public string RoutingButtonText => IsRunning ? "Stop routing" : "Start routing";
 
-    public bool HasNodes => Sources.Count > 0 || Destinations.Count > 0;
+    public bool HasNodes => Sources.Count > 0 || Destinations.Count > 0 || VirtualOutputs.Count > 0;
+
+    /// <summary>Name typed into the new virtual output field.</summary>
+    public string NewVirtualOutputName
+    {
+        get => _newVirtualOutputName;
+        set
+        {
+            if (SetProperty(ref _newVirtualOutputName, value)) OnPropertyChanged(nameof(CanCreateVirtualOutput));
+        }
+    }
+
+    public bool CanCreateVirtualOutput => !string.IsNullOrWhiteSpace(_newVirtualOutputName);
 
     public bool HasVirtualCable => OutputDevices.Any(VirtualCableService.IsVirtual);
 
@@ -383,6 +412,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IsRunning = true;
         _meterTimer.Start();
         _retryTimer.Start();
+
+        foreach (var source in Sources) ApplyExclusive(source);
+
         UpdateStatus();
     }
 
@@ -393,6 +425,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _retryTimer.Stop();
         IsRunning = false;
         _liveNodeCount = 0;
+
+        // Anything we took off its own output gets it back the moment routing stops. Leaving
+        // a program muted in the volume mixer is the kind of thing people never find again.
+        ReleaseAllExclusive();
 
         foreach (var node in AllNodes())
         {
@@ -413,7 +449,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // Building the patchbay
 
-    private IEnumerable<PatchNodeViewModel> AllNodes() => Sources.Cast<PatchNodeViewModel>().Concat(Destinations);
+    private IEnumerable<PatchNodeViewModel> AllNodes() =>
+        Sources.Cast<PatchNodeViewModel>().Concat(VirtualOutputs).Concat(Destinations);
 
     private void AddSourceFromDescriptor(object? descriptor)
     {
@@ -472,6 +509,62 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return vm;
     }
 
+    /// <summary>
+    /// Creates a virtual output. It is a box inside LoopIt7, not a Windows endpoint: nothing
+    /// else on the machine can select it, and programs reach it by being captured into it.
+    /// </summary>
+    public VirtualOutputNodeViewModel AddVirtualOutput(string name, NodeSettings? saved = null)
+    {
+        var vm = new VirtualOutputNodeViewModel(saved?.Id ?? NewId(), saved?.Title ?? name)
+        {
+            Applications = Applications
+        };
+        PlaceNode(vm, saved, LaneVirtualX, VirtualOutputs.Count);
+        WireNode(vm);
+
+        VirtualOutputs.Add(vm);
+        _graph.AddVirtualOutput(vm.Id, vm.Title);
+        PushMix(vm);
+
+        Finish();
+        return vm;
+    }
+
+    private void CreateVirtualOutput()
+    {
+        string name = NewVirtualOutputName.Trim();
+        if (name.Length == 0) return;
+
+        var created = AddVirtualOutput(name);
+        NewVirtualOutputName = string.Empty;
+
+        Notice = $"\"{created.Title}\" is ready. Assign a program to it, then run cables out to every output it should reach.";
+    }
+
+    /// <summary>
+    /// Points one program at a virtual output: captures it if it is not on the canvas yet,
+    /// patches it in, and takes it off its own output so it is heard once rather than twice.
+    /// </summary>
+    public void AssignApplication(VirtualOutputNodeViewModel target, AudioApplication application)
+    {
+        var existing = Sources.FirstOrDefault(s =>
+            s.Kind == SourceKind.Application &&
+            string.Equals(s.ExecutableName, application.ExecutableName, StringComparison.OrdinalIgnoreCase));
+
+        var source = existing ?? AddApplicationSource(application);
+
+        if (Cables.Any(c => c.Source == source && c.Destination == target))
+        {
+            Notice = $"{source.Title} already feeds {target.Title}.";
+            return;
+        }
+
+        if (!TryConnect(source, target)) return;
+
+        source.Exclusive = true;
+        Notice = $"{source.Title} now plays through {target.Title} only. Send {target.Title} to every output that should hear it.";
+    }
+
     private DestinationNodeViewModel AddDestination(AudioDeviceInfo device, NodeSettings? saved = null)
     {
         bool virtualCable = VirtualCableService.IsVirtual(device);
@@ -513,6 +606,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void WireNode(PatchNodeViewModel node)
     {
         node.RemoveRequested += (_, _) => RemoveNode(node);
+
+        if (node is SourceNodeViewModel { SupportsExclusive: true } program)
+        {
+            program.ExclusiveChanged += (_, _) =>
+            {
+                ApplyExclusive(program);
+                Persist();
+            };
+        }
+
         node.MixChanged += (_, _) => OnNodeMixChanged(node);
         node.SoloChanged += (_, _) => ApplySolo();
         node.PropertyChanged += (_, e) =>
@@ -603,9 +706,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             RemoveCable(cable, persist: false);
         }
 
+        ReleaseExclusive(node.Id);
         _graph.RemoveNode(node.Id);
 
         if (node is SourceNodeViewModel source) Sources.Remove(source);
+        else if (node is VirtualOutputNodeViewModel virtualOutput) VirtualOutputs.Remove(virtualOutput);
         else if (node is DestinationNodeViewModel destination) Destinations.Remove(destination);
 
         Finish();
@@ -615,16 +720,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// Patches a cable. Returns false when the pair is already joined, which is what the
     /// canvas needs in order to snap the dragged cable back instead of stacking a duplicate.
     /// </summary>
-    public bool TryConnect(SourceNodeViewModel source, DestinationNodeViewModel destination)
+    public bool TryConnect(PatchNodeViewModel source, PatchNodeViewModel destination)
     {
+        if (!source.CanSend || !destination.CanReceive) return false;
         if (Cables.Any(c => c.Source == source && c.Destination == destination)) return false;
 
-        // Tapping a device and feeding it straight back is a feedback loop. It builds to full
-        // scale in under a second, and it does that in somebody's headphones, so it is refused
-        // rather than warned about.
-        if (source.Kind == SourceKind.DeviceLoopback && source.DeviceId == destination.DeviceId)
+        // A feedback loop builds to full scale in under a second, and it does that in
+        // somebody's headphones, so it is refused rather than warned about.
+        if (WouldFeedBack(source, destination, out string reason))
         {
-            Notice = $"That would feed {destination.Title} back into itself. You are already hearing this audio there.";
+            Notice = reason;
             return false;
         }
 
@@ -642,6 +747,69 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Cables.Add(cable);
         Finish();
         return true;
+    }
+
+    /// <summary>
+    /// Everything the audio leaving this box can reach, following cables through any virtual
+    /// outputs on the way. The optional extra edge is the cable being considered, so a patch
+    /// can be judged before it exists.
+    /// </summary>
+    private HashSet<PatchNodeViewModel> Downstream(
+        PatchNodeViewModel start,
+        PatchNodeViewModel? extraFrom = null,
+        PatchNodeViewModel? extraTo = null)
+    {
+        var seen = new HashSet<PatchNodeViewModel>();
+        var pending = new Stack<PatchNodeViewModel>();
+        pending.Push(start);
+
+        while (pending.Count > 0)
+        {
+            var node = pending.Pop();
+            if (!seen.Add(node)) continue;
+
+            // Only a source or a virtual output passes anything on. A real endpoint is the end.
+            if (!node.CanSend) continue;
+
+            foreach (var cable in Cables)
+            {
+                if (cable.Source == node) pending.Push(cable.Destination);
+            }
+
+            if (extraFrom is not null && extraTo is not null && node == extraFrom) pending.Push(extraTo);
+        }
+
+        return seen;
+    }
+
+    /// <summary>
+    /// Whether patching this pair would let audio arrive back where it came from. Two ways
+    /// that can happen now: a chain of virtual outputs that closes on itself, and a device
+    /// tapped in loopback that reaches that same device again, however many boxes are in
+    /// between.
+    /// </summary>
+    private bool WouldFeedBack(PatchNodeViewModel from, PatchNodeViewModel to, out string reason)
+    {
+        if (ReferenceEquals(from, to) || Downstream(to).Contains(from))
+        {
+            reason = $"That would run {to.Title} back into itself. Audio going round a loop with nothing in the way reaches full scale almost at once.";
+            return true;
+        }
+
+        foreach (var tap in Sources.Where(s => s.Kind == SourceKind.DeviceLoopback))
+        {
+            foreach (var node in Downstream(tap, from, to))
+            {
+                if (node is not DestinationNodeViewModel endpoint) continue;
+                if (endpoint.DeviceId != tap.DeviceId) continue;
+
+                reason = $"That would feed {endpoint.Title} back into itself through {tap.Title}. You are already hearing this audio there.";
+                return true;
+            }
+        }
+
+        reason = string.Empty;
+        return false;
     }
 
     public void RemoveCable(CableViewModel cable, bool persist = true)
@@ -743,6 +911,62 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         else
         {
             Notice = "Only one output on this machine, so there is one send. Add another output to fan out.";
+        }
+    }
+
+    // Taking a program off its own output
+
+    /// <summary>
+    /// Applies or lifts the Windows mute for one program, so the patchbay is the only place
+    /// it comes out. Only ever muted while routing is actually running.
+    /// </summary>
+    private void ApplyExclusive(SourceNodeViewModel source)
+    {
+        if (!source.SupportsExclusive) return;
+
+        if (!IsRunning || !source.Exclusive)
+        {
+            ReleaseExclusive(source.Id);
+            return;
+        }
+
+        int processId = _graph.GetApplicationProcessId(source.Id);
+        if (processId <= 0) processId = source.ProcessId;
+        if (processId <= 0) return;
+
+        // A program that restarted came back under a new process id, so the note of what we
+        // muted has to move with it.
+        if (_silencedApps.TryGetValue(source.Id, out int previous) && previous != processId)
+        {
+            AppSessionControl.SetMuted(previous, false);
+        }
+
+        if (AppSessionControl.SetMuted(processId, true)) _silencedApps[source.Id] = processId;
+    }
+
+    private void ReleaseExclusive(string nodeId)
+    {
+        if (!_silencedApps.Remove(nodeId, out int processId)) return;
+        AppSessionControl.SetMuted(processId, false);
+    }
+
+    private void ReleaseAllExclusive()
+    {
+        foreach (string nodeId in _silencedApps.Keys.ToList()) ReleaseExclusive(nodeId);
+    }
+
+    /// <summary>
+    /// Reopens anything waiting, and reapplies the takeover mutes. Windows makes a fresh
+    /// session whenever a program moves endpoint or restarts, and a fresh session is not
+    /// muted, so this has to be done again rather than once.
+    /// </summary>
+    private void OnRetryTick(object? sender, EventArgs e)
+    {
+        _graph.RetryPending();
+
+        foreach (var source in Sources)
+        {
+            if (source.Exclusive) ApplyExclusive(source);
         }
     }
 
@@ -863,6 +1087,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             }
         }
 
+        foreach (var virtualOutput in VirtualOutputs)
+        {
+            // The engine drives a virtual output as a source, so it reports like one.
+            var busStatus = _graph.GetSourceStatus(virtualOutput.Id, out string? busDetail, out int busRate, out int busChannels);
+            virtualOutput.ApplyStatus(busStatus, busDetail, busRate, busChannels);
+            virtualOutput.Peak = busStatus == NodeStatus.Live ? _graph.ReadSourcePeak(virtualOutput.Id) : 0;
+            if (busStatus == NodeStatus.Live) live++;
+        }
+
         foreach (var destination in Destinations)
         {
             var status = _graph.GetDestinationStatus(destination.Id, out string? detail, out int rate, out int channels);
@@ -898,8 +1131,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         int liveSources = Sources.Count(s => s.IsLive);
         int liveDestinations = Destinations.Count(d => d.IsLive);
 
+        string buses = VirtualOutputs.Count > 0
+            ? $"{Describe(VirtualOutputs.Count, "virtual output")} · "
+            : string.Empty;
+
         StatusText = $"Live · {Describe(liveSources, "source")} · {Describe(Cables.Count, "cable")} · " +
-                     $"{Describe(liveDestinations, "output")} · {LatencyMs} ms buffer";
+                     $"{buses}{Describe(liveDestinations, "output")} · {LatencyMs} ms buffer";
     }
 
     private static string Describe(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
@@ -967,6 +1204,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             PatchNodeViewModel? created = saved.Kind switch
             {
                 "Destination" => RestoreDestination(saved),
+                "VirtualOutput" => AddVirtualOutput(saved.Title, saved),
                 "Application" => RestoreApplication(saved),
                 _ => RestoreDeviceSource(saved)
             };
@@ -976,10 +1214,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         foreach (var cable in cables)
         {
-            if (!byId.TryGetValue(cable.SourceId, out var source) || source is not SourceNodeViewModel sourceVm) continue;
-            if (!byId.TryGetValue(cable.DestinationId, out var destination) || destination is not DestinationNodeViewModel destinationVm) continue;
+            if (!byId.TryGetValue(cable.SourceId, out var source) || !source.CanSend) continue;
+            if (!byId.TryGetValue(cable.DestinationId, out var destination) || !destination.CanReceive) continue;
 
-            if (!TryConnect(sourceVm, destinationVm)) continue;
+            if (!TryConnect(source, destination)) continue;
 
             var created = Cables[^1];
             created.GainDb = cable.GainDb;
@@ -1008,7 +1246,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             string.Equals(a.ExecutableName, saved.ExecutableName, StringComparison.OrdinalIgnoreCase));
 
         var application = running ?? new AudioApplication(0, saved.ExecutableName, saved.Title, false);
-        return AddApplicationSource(application, saved);
+        var restored = AddApplicationSource(application, saved);
+        restored.Exclusive = saved.Exclusive;
+        return restored;
     }
 
     private PatchNodeViewModel RestoreDestination(NodeSettings saved)
@@ -1043,7 +1283,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 GainDb = source.GainDb,
                 Muted = source.Muted,
                 Pan = source.Pan,
-                Solo = source.Solo
+                Solo = source.Solo,
+                Exclusive = source.Exclusive
+            });
+        }
+
+        foreach (var virtualOutput in VirtualOutputs)
+        {
+            list.Add(new NodeSettings
+            {
+                Id = virtualOutput.Id,
+                Kind = "VirtualOutput",
+                Title = virtualOutput.Title,
+                Subtitle = virtualOutput.Subtitle,
+                X = virtualOutput.X,
+                Y = virtualOutput.Y,
+                GainDb = virtualOutput.GainDb,
+                Muted = virtualOutput.Muted,
+                Pan = virtualOutput.Pan
             });
         }
 
@@ -1122,6 +1379,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         Persist();
         _disposed = true;
+
+        // Last chance to hand every program back its own output.
+        ReleaseAllExclusive();
 
         _meterTimer.Stop();
         _deviceTimer.Stop();

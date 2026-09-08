@@ -8,7 +8,7 @@ public sealed class NodeSettings
 {
     public string Id { get; set; } = string.Empty;
 
-    /// <summary>"Device", "DeviceLoopback", "Application" or "Destination".</summary>
+    /// <summary>"Device", "DeviceLoopback", "Application", "VirtualOutput" or "Destination".</summary>
     public string Kind { get; set; } = "Device";
 
     public string Title { get; set; } = string.Empty;
@@ -29,6 +29,12 @@ public sealed class NodeSettings
     public double Pan { get; set; }
 
     public bool Solo { get; set; }
+
+    /// <summary>
+    /// For an application node: mute the program in the Windows volume mixer while routing
+    /// runs, so it is heard only where LoopIt7 sends it.
+    /// </summary>
+    public bool Exclusive { get; set; }
 }
 
 public sealed class CableSettings

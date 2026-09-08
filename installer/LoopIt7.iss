@@ -5,7 +5,7 @@
 ; wizard offers an all users install for anyone who wants one.
 
 #define AppName        "LoopIt7"
-#define AppVersion     "1.1.0"
+#define AppVersion     "1.2.0"
 #define AppPublisher   "SeventhSG"
 #define AppUrl         "https://github.com/SeventhSG/LoopIt7"
 #define AppExeName     "LoopIt7.exe"
@@ -42,9 +42,14 @@ PrivilegesRequiredOverridesAllowed=dialog commandline
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
-CloseApplications=yes
+; LoopIt7 turns a close request into a hide to tray, so the Restart Manager cannot shut it
+; down on its own. PrepareToInstall below does it instead.
+CloseApplications=no
 RestartApplications=no
 AllowNoIcons=yes
+UsePreviousAppDir=yes
+UsePreviousTasks=yes
+SetupMutex=LoopIt7Setup
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -70,8 +75,33 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
     Flags: deletevalue uninsdeletevalue; ValueType: none
 
 [Code]
+const
+  { The running app holds this. Its presence is how setup knows to close it first. }
+  AppMutexName = 'Local\LoopIt7.SingleInstance';
+
+  { Inno writes the install it made under its own AppId with an _is1 suffix. Reading the
+    version back out is what turns "install" into "upgrade" in the wizard. }
+  UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{7C6C6E2A-5B4D-4F1E-9C21-0A7F5B0E4D71}_is1';
+
 var
   DownloadPage: TDownloadWizardPage;
+  InstalledVersion: String;
+
+{ The version already on this machine, per user or for all users, or empty when LoopIt7 has
+  never been installed here. }
+function PreviousVersion(): String;
+begin
+  Result := '';
+  if RegQueryStringValue(HKCU, UninstallKey, 'DisplayVersion', Result) then Exit;
+  if RegQueryStringValue(HKLM, UninstallKey, 'DisplayVersion', Result) then Exit;
+  if IsWin64 and RegQueryStringValue(HKLM32, UninstallKey, 'DisplayVersion', Result) then Exit;
+  Result := '';
+end;
+
+function IsUpgrade(): Boolean;
+begin
+  Result := InstalledVersion <> '';
+end;
 
 { True when a .NET 10 desktop runtime is present. LoopIt7 is framework dependent, which is
   what keeps the download to a couple of megabytes instead of a hundred and fifty. }
@@ -105,6 +135,53 @@ begin
     'Windows components',
     'LoopIt7 needs the .NET 10 desktop runtime.',
     nil);
+
+end;
+
+{ The Ready page, because an upgrade skips the welcome and the folder pages and this is the
+  last thing anybody reads before files start moving. }
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo,
+  MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+begin
+  Result := '';
+
+  if IsUpgrade then
+    Result := 'Upgrading LoopIt7 ' + InstalledVersion + ' to {#AppVersion}.' + NewLine +
+              Space + 'Your patchbay, presets and options are kept exactly as they are.' +
+              NewLine + NewLine;
+
+  Result := Result + MemoDirInfo;
+
+  if MemoTasksInfo <> '' then
+    Result := Result + NewLine + NewLine + MemoTasksInfo;
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  InstalledVersion := PreviousVersion;
+  Result := True;
+end;
+
+{ The old copy has to let go of its own files before they can be replaced. LoopIt7 hides to
+  the tray rather than closing, so asking it politely through the Restart Manager does not
+  work and setup closes it outright. Settings are written as they change, so nothing is lost. }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+  NeedsRestart := False;
+
+  if not CheckForMutexes(AppMutexName) then Exit;
+
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#AppExeName} /F', '',
+    SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  { Give Windows a moment to release the file handles the process was holding. }
+  Sleep(1200);
+
+  if CheckForMutexes(AppMutexName) then
+    Result := 'LoopIt7 is still running and setup could not close it. Quit it from the tray icon, then try again.';
 end;
 
 { Runs on the Ready page, so a silent install skips it. That is deliberate: a scripted

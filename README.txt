@@ -1,10 +1,10 @@
 ===============================================================================
 
   L O O P I T 7
-  A patchbay for Windows audio. Every source, every output, and the cables
-  in between.
+  A patchbay for Windows audio. Name your own outputs, send programs to
+  them, and fan them out anywhere.
 
-  Version 1.1.0
+  Version 1.2.0
   Built by SeventhSG
   https://github.com/SeventhSG/LoopIt7
 
@@ -22,6 +22,38 @@ One microphone can reach your headphones and the room monitors at once.
 Spotify can go to Discord without going through your mic. A game can go to the
 stream but not to your ears. The meters move while it happens, so you can see
 which cable is carrying what.
+
+
+VIRTUAL OUTPUTS
+-------------------------------------------------------------------------------
+
+Make an output of your own, name it, and decide what comes out of it.
+
+  1. Press "Add virtual output" and name it after whatever it is for.
+     Discord. Stream. Speakers in the other room.
+  2. Press the + on the box and pick the programs that should play through it.
+  3. Drag cables from the box to every output that should hear them.
+
+Each program you assign gets captured on its own and muted where Windows was
+sending it, so it comes out of your named box instead. The box has one fader,
+one mute and one meter for the whole thing, so moving where all of it goes is
+one cable rather than three programs' settings.
+
+    Discord  ---+
+    Spotify  ---+---> [ Stream ] ---+---> Headphones
+    Mic      ---+                   +---> Elgato Virtual Audio ---> OBS
+
+Virtual outputs can feed each other. A chain that would close on itself is
+refused before it can run away.
+
+A virtual output is a box inside LoopIt7, not a Windows device. Nothing else on
+the machine can select it from a dropdown, which is exactly why you assign
+programs to it here rather than there. See ABOUT VIRTUAL DEVICES below.
+
+Turning it off: the toggle in the corner of a program's box is what takes it
+off its own output. Switch it off and the program plays in both places again.
+Everything is handed back the moment routing stops or LoopIt7 closes, so
+nothing is ever left muted in your volume mixer.
 
 
 GETTING STARTED
@@ -45,6 +77,9 @@ To build one by hand:
   2. Press "Add output" and pick where it should land.
   3. Drag from the circle on the right of the source to the output box.
   4. Press "Start routing".
+
+Sources sit on the left, virtual outputs in the middle, real outputs on the
+right.
 
 Drag the boxes anywhere you like. The layout is saved with your setup.
 
@@ -70,6 +105,10 @@ A NOTE ON FEEDBACK
 Tapping a playback device and sending it back to that same device is a feedback
 loop. It reaches full scale in under a second, and it does that in whatever you
 are wearing. LoopIt7 refuses that connection rather than warning about it.
+
+That holds however many boxes are in the way. A device tap that reaches its own
+device through two virtual outputs is refused just the same, and so is a chain
+of virtual outputs that closes on itself.
 
 When you are trying an unfamiliar routing, turn your output down first anyway.
 
@@ -109,7 +148,12 @@ extension. Windows works the same way and offers no shortcut: an audio endpoint
 comes from a kernel mode driver, there is no user mode API that adds one, and
 Windows 11 x64 will not load an unsigned driver.
 
-So LoopIt7 does not pretend. Everything above works with no driver installed.
+So LoopIt7 does not pretend. Everything above works with no driver installed,
+including the virtual outputs. A LoopIt7 virtual output is a box inside the
+app: it will never appear in the Windows sound settings and OBS will not list
+it. Programs reach it by being assigned to it here instead of choosing it
+there. From where you sit the result is the same, it is simply arrived at from
+the other end.
 
 The one thing a cable is genuinely needed for is handing a mix back to another
 program as if it were a microphone. For that, LoopIt7 uses whatever cable is
@@ -180,6 +224,17 @@ TROUBLESHOOTING
 
   A device disappeared and came back
     LoopIt7 reconnects on its own within a few seconds. Nothing to do.
+
+  A program I assigned to a virtual output has gone silent everywhere
+    Start routing. A program is only taken off its own output while routing
+    is actually running, and it is handed straight back when you stop. If it
+    is still silent, switch the toggle in the corner of its box off.
+
+  Windows says the installer might be unsafe
+    The download is not code signed. Press More info, then Run anyway.
+    Removing that box needs a commercial code signing certificate. Every
+    release is built in the open by GitHub Actions from the tagged commit,
+    so the build can be checked rather than trusted.
 
 
 LICENCE

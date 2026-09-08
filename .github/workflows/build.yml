@@ -35,6 +35,15 @@ jobs:
       - name: Draw artwork
         run: powershell -ExecutionPolicy Bypass -File build/make-assets.ps1
 
+      # Signs only when the repository has a certificate in its secrets. Without one the
+      # step still runs and still succeeds; the download is simply unsigned, which is what
+      # it has always been.
+      - name: Sign the app
+        env:
+          LOOPIT7_CERT_BASE64: ${{ secrets.LOOPIT7_CERT_BASE64 }}
+          LOOPIT7_CERT_PASSWORD: ${{ secrets.LOOPIT7_CERT_PASSWORD }}
+        run: powershell -ExecutionPolicy Bypass -File build/sign.ps1 -Path publish/LoopIt7.exe
+
       - name: Build the installer
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
@@ -43,11 +52,29 @@ jobs:
           & $iscc.FullName /Qp installer/LoopIt7.iss
         shell: pwsh
 
+      - name: Sign the installer
+        env:
+          LOOPIT7_CERT_BASE64: ${{ secrets.LOOPIT7_CERT_BASE64 }}
+          LOOPIT7_CERT_PASSWORD: ${{ secrets.LOOPIT7_CERT_PASSWORD }}
+        run: powershell -ExecutionPolicy Bypass -File build/sign.ps1 -Path dist/LoopIt7-Setup.exe
+
       - name: Upload the installer
         uses: actions/upload-artifact@v4
         with:
           name: LoopIt7-Setup
           path: dist/*.exe
+
+      # The self test opens no device and plays nothing. It runs the virtual output on its
+      # own clock for two seconds and checks what comes out, which is the one part of the
+      # engine that has no hardware to lean on.
+      - name: Self test
+        run: |
+          & publish/LoopIt7.exe --self-test
+          Start-Sleep -Seconds 12
+          $report = Get-Content "$env:APPDATA/LoopIt7/self-test.txt" -Raw
+          Write-Output $report
+          if ($report -notmatch 'keeps time and passes signal') { throw 'The virtual output check did not pass.' }
+        shell: pwsh
 
       - name: Attach the installer to the release
         if: startsWith(github.ref, 'refs/tags/v')

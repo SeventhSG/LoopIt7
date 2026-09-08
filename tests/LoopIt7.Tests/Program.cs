@@ -1,10 +1,12 @@
 using LoopIt7.Audio;
 using LoopIt7.Audio.Graph;
+using LoopIt7.Models;
 using LoopIt7.ViewModels;
 
-// Checks the two things about routing that are not safe to verify by trying them: the rule
-// that refuses a patch which would feed audio back into itself, and the pairing of a cable's
-// two ends, which fails silently when it gets the wrong one.
+// Checks the three things that are not safe to verify by trying them: the rule that refuses
+// a patch which would feed audio back into itself, the pairing of a cable's two ends, which
+// fails silently when it gets the wrong one, and which cables LoopIt7 is allowed to rename,
+// which is the one that reaches outside the app and touches somebody else's setup.
 //
 // Runs with no window, no settings file and no audio device opened.
 
@@ -152,6 +154,69 @@ bool Guard(
         inlets.Select(i => i.Detail).Distinct().Count() == 3, "the rows are not distinguishable");
     Check("and they all share the one playback end",
         inlets.All(i => i.Feed.Name == "System"), "playback ends differ");
+}
+
+// Which cables LoopIt7 may rename. Getting this wrong renames a device that somebody else's
+// OBS scene or Discord setting points at, on a machine we do not get to see.
+{
+    var theirs = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{theirs}", "CABLE Input", "VB-Audio Virtual Cable",
+        AudioSourceKind.Render, false);
+
+    var settings = new AppSettings();
+
+    // First run: whatever is here belongs to whoever put it here.
+    CableOwnership.ObserveCables(settings, [theirs]);
+
+    Check("the first look records what was already here", settings.CableBaselineTaken, "no baseline taken");
+    Check("a cable that was here first may not be renamed",
+        !CableOwnership.MayClaim(settings, theirs), "it was claimable");
+
+    // A cable turning up on its own, with nobody having asked, is somebody else's business too.
+    CableOwnership.ObserveCables(settings, [theirs, cableIn]);
+
+    Check("a cable that appears unasked may not be renamed",
+        !CableOwnership.MayClaim(settings, cableIn), "it was claimable");
+
+    // Now the user asks LoopIt7 for one, and one arrives.
+    settings.AwaitingCable = true;
+    CableOwnership.ObserveCables(settings, [theirs, cableIn, cableOut]);
+
+    Check("a cable that arrives after LoopIt7 asked may be renamed",
+        CableOwnership.MayClaim(settings, cableOut), "it was not claimable");
+    Check("and asking is a one time thing", !settings.AwaitingCable, "the flag is still set");
+    Check("the pre-existing cable is still off limits",
+        !CableOwnership.MayClaim(settings, theirs), "it became claimable");
+
+    // Claiming somebody else's cable has to be refused outright, not merely not offered.
+    bool claimed = CableOwnership.TryClaim(settings, theirs, cableOut, "Efe", out string? refusal);
+    Check("claiming a pre-existing cable is refused", !claimed, "it was allowed");
+    Check("and says why", refusal is not null && refusal.Contains("already on this machine"),
+        $"reason was: {refusal}");
+    Check("a refused claim records nothing", settings.ClaimedCables.Count == 0,
+        $"{settings.ClaimedCables.Count} claim(s) recorded");
+}
+
+// Handing a cable back. The bookkeeping has to hold even when the cable itself has gone,
+// which is exactly the state an uninstall on a changed machine runs in.
+{
+    var settings = new AppSettings();
+    settings.ClaimedCables.Add(new CableClaimSettings
+    {
+        RenderEndpointId = cableIn.Id,
+        CaptureEndpointId = cableOut.Id,
+        ClaimedName = "Efe",
+        OriginalRenderName = "CABLE Input",
+        OriginalRenderInterface = "VB-Audio Virtual Cable",
+        OriginalCaptureName = "CABLE Output",
+        OriginalCaptureInterface = "VB-Audio Virtual Cable"
+    });
+
+    // The cable was uninstalled before LoopIt7 was: there is nothing left to rename.
+    CableOwnership.ReleaseAll(settings, []);
+
+    Check("releasing a cable that is gone still drops the claim",
+        settings.ClaimedCables.Count == 0, $"{settings.ClaimedCables.Count} left");
 }
 
 Console.WriteLine();

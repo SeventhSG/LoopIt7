@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Windows.Threading;
 using LoopIt7.Audio;
 using LoopIt7.Audio.Graph;
@@ -621,7 +622,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return false;
         }
 
-        if (CableOwnership.IsOwned(_settings, feed))
+        if (CableOwnership.MayClaim(_settings, feed) && !CableOwnership.IsOwned(_settings, feed))
         {
             CableOwnership.TryClaim(_settings, feed, pickup, target.Title, out _);
         }
@@ -634,6 +635,31 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Notice = $"{target.Title} is reachable from Windows now. {target.InletHint}";
         error = null;
         return true;
+    }
+
+    /// <summary>
+    /// Sends the user to get a cable, and remembers that it was LoopIt7 that asked. The cable
+    /// that turns up next is then ours to name, which is the difference between a stranger
+    /// seeing "LoopIt7 Cable" in Discord and seeing somebody else's product name.
+    /// </summary>
+    public void RequestCable()
+    {
+        _settings.AwaitingCable = true;
+        _settingsService.Save(_settings);
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(VirtualCableService.RecommendedCableUrl)
+            {
+                UseShellExecute = true
+            });
+
+            Notice = $"Install {VirtualCableService.RecommendedCableName}, then come back. LoopIt7 will pick it up and name it after your box.";
+        }
+        catch (Exception ex)
+        {
+            Notice = $"Could not open the download page: {ex.Message}. It is at {VirtualCableService.RecommendedCableUrl}.";
+        }
     }
 
     private DestinationNodeViewModel AddDestination(AudioDeviceInfo device, NodeSettings? saved = null)
@@ -1034,6 +1060,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         SyncDevices(OutputDevices, _devices.GetOutputs());
         Sync(CableInlets, VirtualCableService.FindInlets(OutputDevices, InputDevices));
         OnPropertyChanged(nameof(HasVirtualCable));
+
+        if (CableOwnership.ObserveCables(_settings, OutputDevices.Concat(InputDevices)) && !_loading)
+        {
+            _settingsService.Save(_settings);
+        }
     }
 
     private static void SyncDevices(ObservableCollection<AudioDeviceInfo> target, IReadOnlyList<AudioDeviceInfo> fresh)

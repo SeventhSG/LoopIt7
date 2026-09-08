@@ -149,19 +149,33 @@ comes from a kernel mode driver, there is no user mode API that adds one, and
 Windows 11 x64 will not load an unsigned driver.
 
 So LoopIt7 does not pretend. Everything above works with no driver installed,
-including the virtual outputs. A LoopIt7 virtual output is a box inside the
-app: it will never appear in the Windows sound settings and OBS will not list
-it. Programs reach it by being assigned to it here instead of choosing it
-there. From where you sit the result is the same, it is simply arrived at from
-the other end.
+including the virtual outputs. On its own, a LoopIt7 virtual output is a box
+inside the app: it will not appear in the Windows sound settings. Programs
+reach it by being assigned to it here instead of choosing it there.
 
-The one thing a cable is genuinely needed for is handing a mix back to another
-program as if it were a microphone. For that, LoopIt7 uses whatever cable is
-already on your machine. It recognises VB-Audio Cable, VoiceMeeter, Elgato
-Virtual Audio and NVIDIA Broadcast, and points you at VB-Audio's free cable if
-there is none:
+
+GIVING A BOX A WAY IN
+-------------------------------------------------------------------------------
+
+If you want other programs to choose your box themselves, press the link button
+on it and pick a cable.
+
+A cable is a free driver with two ends. The other program sends to one end,
+LoopIt7 listens on the other, and what arrives lands in your box and leaves
+down its cables as usual. The picker lists the two ends as a pair, so nothing
+is guessed, and it says which end LoopIt7 will open.
+
+If there is no cable on this machine the picker says so and offers to fetch
+one. LoopIt7 recognises VB-Audio Cable, VoiceMeeter, Elgato Virtual Audio and
+NVIDIA Broadcast, and points you at VB-Audio's free cable if you have none:
 
     https://vb-audio.com/Cable/
+
+A cable LoopIt7 asked you to install is named after the box it serves, so the
+name in Discord's list is the name on your canvas. A cable that was already on
+the machine keeps the name it came with, because other programs are pointing at
+that name and it is not ours to change. Uninstalling LoopIt7 puts back every
+name it changed.
 
 
 CABLE CONTROLS

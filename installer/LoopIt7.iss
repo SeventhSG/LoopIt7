@@ -68,6 +68,12 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+; Hand back any device LoopIt7 renamed, before the executable that knows how to do it is
+; deleted. A machine that no longer has LoopIt7 on it must not be left with a device called
+; "LoopIt7 Cable" in every program's list and nothing to explain it.
+Filename: "{app}\{#AppExeName}"; Parameters: "--release-cables"; RunOnceId: "ReleaseCables"; Flags: waituntilterminated runhidden skipifdoesntexist
+
 [Registry]
 ; The app writes its own autostart entry when the option is switched on. Uninstalling
 ; must not leave that behind pointing at a path that no longer exists.

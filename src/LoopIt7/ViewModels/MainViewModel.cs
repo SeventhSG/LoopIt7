@@ -103,6 +103,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RefreshApplications();
         RebuildDeviceRows();
         RestoreWorkspace(_settings.Nodes, _settings.Cables);
+        ReleaseLeftoverTakeovers();
 
         Midi.ApplySavedRoutes(_settings.MidiRoutes.Select(r => (r.Input, r.Output)));
 
@@ -953,6 +954,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void ReleaseAllExclusive()
     {
         foreach (string nodeId in _silencedApps.Keys.ToList()) ReleaseExclusive(nodeId);
+    }
+
+    /// <summary>
+    /// Hands back anything a previous run left muted. Every ordinary way of leaving does that
+    /// already, but a killed process does not run its own shutdown, and Windows keeps a
+    /// session mute across restarts. Routing is not running yet at this point, so nothing
+    /// here has any business being muted by us.
+    /// </summary>
+    private void ReleaseLeftoverTakeovers()
+    {
+        foreach (var source in Sources)
+        {
+            if (!source.SupportsExclusive || !source.Exclusive) continue;
+
+            int processId = _graph.GetApplicationProcessId(source.Id);
+            if (processId <= 0) processId = source.ProcessId;
+            if (processId > 0) AppSessionControl.SetMuted(processId, false);
+        }
     }
 
     /// <summary>

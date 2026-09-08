@@ -30,6 +30,31 @@ public static class CableOwnership
     public const string OwnedInterfaceName = "LoopIt7";
 
     /// <summary>
+    /// What to call the two ends of a cable LoopIt7 has taken over.
+    /// <para>
+    /// They get different names on purpose. The playback end is the one somebody picks in
+    /// Discord, so it reads as the box itself. The recording end is LoopIt7's own tap on the
+    /// same cable, and it appears in every microphone list on the machine: naming it the same
+    /// as the playback end would invite somebody to pick it in OBS expecting the mix and get
+    /// whatever was sent in instead.
+    /// </para>
+    /// <para>
+    /// The bracket keeps the driver's maker visible. The cable is somebody else's work, and
+    /// after a rename nothing else on the machine would say so.
+    /// </para>
+    /// </summary>
+    public static (EndpointNames Feed, EndpointNames Pickup) NamesFor(string boxTitle, string vendor)
+    {
+        string title = boxTitle.Trim();
+
+        string bracket = vendor.Length == 0
+            ? OwnedInterfaceName
+            : $"{OwnedInterfaceName} · {vendor}";
+
+        return (new EndpointNames(title, bracket), new EndpointNames($"{title} pickup", bracket));
+    }
+
+    /// <summary>
     /// Notes which cables were already here, once, on the first run that ever looks. Everything
     /// present at that moment belongs to somebody else's setup and is off limits for renaming
     /// for the rest of the install.
@@ -142,11 +167,11 @@ public static class CableOwnership
             return false;
         }
 
-        var claimed = new EndpointNames(name.Trim(), OwnedInterfaceName);
+        var (feedName, pickupName) = NamesFor(name, VirtualCableService.VendorOf(render));
 
-        if (!EndpointNaming.TryWrite(render, claimed, out error)) return false;
+        if (!EndpointNaming.TryWrite(render, feedName, out error)) return false;
 
-        if (!EndpointNaming.TryWrite(capture, claimed, out error))
+        if (!EndpointNaming.TryWrite(capture, pickupName, out error))
         {
             // Put the end that did take back, rather than leaving the cable half renamed.
             EndpointNaming.TryWrite(render, renderNames, out _);
@@ -157,7 +182,7 @@ public static class CableOwnership
         {
             RenderEndpointId = render.Id,
             CaptureEndpointId = capture.Id,
-            ClaimedName = claimed.Name,
+            ClaimedName = feedName.Name,
             OriginalRenderName = renderNames.Name,
             OriginalRenderInterface = renderNames.InterfaceName,
             OriginalCaptureName = captureNames.Name,

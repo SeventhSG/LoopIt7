@@ -292,6 +292,36 @@ bool Guard(
         atThree == Visibility.Collapsed, $"the empty state was {atThree}");
 }
 
+// What a claimed cable ends up called, in every program's device list on the machine.
+{
+    var vb = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{vb}", "CABLE Input", "VB-Audio Virtual Cable",
+        AudioSourceKind.Render, false);
+
+    Check("the driver's maker is recognised", VirtualCableService.VendorOf(vb) == "VB-Audio",
+        $"got '{VirtualCableService.VendorOf(vb)}'");
+
+    var (feed, pickup) = CableOwnership.NamesFor("Efe", VirtualCableService.VendorOf(vb));
+
+    Check("the end other programs pick reads as the box",
+        feed.Display == "Efe (LoopIt7 · VB-Audio)", $"got '{feed.Display}'");
+
+    Check("the end LoopIt7 taps is told apart from it",
+        pickup.Display == "Efe pickup (LoopIt7 · VB-Audio)", $"got '{pickup.Display}'");
+
+    Check("so nobody can pick the wrong one by name", feed.Display != pickup.Display,
+        "both ends are called the same thing");
+
+    Check("whoever made the driver stays visible",
+        feed.Display.Contains("VB-Audio") && pickup.Display.Contains("VB-Audio"),
+        "the vendor was dropped from the name");
+
+    // An unrecognised cable has no vendor to credit, and an empty bracket would read badly.
+    var (plainFeed, _) = CableOwnership.NamesFor("Efe", string.Empty);
+    Check("an unknown driver leaves no empty brackets behind",
+        plainFeed.Display == "Efe (LoopIt7)", $"got '{plainFeed.Display}'");
+}
+
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "all checks passed" : $"{failures} check(s) failed");
 return failures == 0 ? 0 : 1;

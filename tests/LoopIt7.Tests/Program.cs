@@ -334,14 +334,33 @@ bool Guard(
         "{0.0.0.00000000}.{elgato}", "System", "Elgato Virtual Audio",
         AudioSourceKind.Render, false);
 
+    // One vendor, three products. Installing the plain cable is no licence to rename the
+    // other two, which is why ownership is matched on the driver string and not the vendor.
+    var theirVoiceMeeter = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{vaio}", "VoiceMeeter Input", "VB-Audio VoiceMeeter VAIO",
+        AudioSourceKind.Render, false);
+
+    var theirCableA = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{cablea}", "CABLE-A Input", "VB-Audio Cable A",
+        AudioSourceKind.Render, false);
+
     var settings = new AppSettings();
-    CableOwnership.ObserveCables(settings, [installed, theirElgato], "VB-Audio Cable");
+    CableOwnership.ObserveCables(
+        settings,
+        [installed, theirElgato, theirVoiceMeeter, theirCableA],
+        "VB-Audio Virtual Cable");
 
     Check("a cable setup installed is ours from the first look",
         CableOwnership.MayClaim(settings, installed), "it was not claimable");
 
-    Check("and anything else on the machine still is not",
+    Check("somebody else's Elgato still is not",
         !CableOwnership.MayClaim(settings, theirElgato), "the Elgato became claimable");
+
+    Check("nor is VoiceMeeter, same vendor though it is",
+        !CableOwnership.MayClaim(settings, theirVoiceMeeter), "VoiceMeeter became claimable");
+
+    Check("nor their other VB-Audio cable",
+        !CableOwnership.MayClaim(settings, theirCableA), "Cable A became claimable");
 
     // Without the note, the same machine reads completely differently.
     var blind = new AppSettings();

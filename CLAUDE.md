@@ -91,9 +91,17 @@ serves one box, so how many boxes Windows can see is how many cables are install
 The installer bundles VB-Audio's cable when their redistributable is sitting in
 `installer/cable/`, and builds and works without it when it is not, so the licensing answer
 changes a file rather than the script. Shipping that file needs a distribution agreement
-with VB-Audio. When setup does install a cable it writes the family name to
-`installed-cable.txt` beside the settings, because by the time the app runs, a cable
-installed thirty seconds ago and one the user has had for years look identical.
+with VB-Audio. The offer appears whenever that one cable is missing, even on a machine with
+cables of another make: those belong to somebody else's setup and are not ours to rename, so
+without one of our own LoopIt7 could never put its name on anything. The exception is that
+same cable already being present, where running its installer again would add nothing and
+hand us the user's own cable.
+
+When setup installs one it writes the driver string to `installed-cable.txt` beside the
+settings, because by the time the app runs, a cable installed thirty seconds ago and one the
+user has had for years look identical. The driver string and not the vendor: VB-Audio's plain
+cable, their A+B pack and VoiceMeeter's VAIO all say VB-Audio, and installing one is no
+licence to rename the others.
 
 Which cables LoopIt7 may rename is decided in `CableOwnership`, and the rule is narrow on
 purpose. A cable that was on the machine before LoopIt7 ever asked for one is never

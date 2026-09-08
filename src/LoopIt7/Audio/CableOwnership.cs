@@ -68,7 +68,7 @@ public static class CableOwnership
     /// </summary>
     /// <returns>True when something was recorded, so the caller knows to save.</returns>
     public static bool ObserveCables(AppSettings settings, IEnumerable<AudioDeviceInfo> devices) =>
-        ObserveCables(settings, devices, InstalledCableFamily());
+        ObserveCables(settings, devices, InstalledCableDriver());
 
     /// <summary>
     /// The same, told rather than asked what setup installed. Splitting it out is what lets
@@ -77,7 +77,7 @@ public static class CableOwnership
     public static bool ObserveCables(
         AppSettings settings,
         IEnumerable<AudioDeviceInfo> devices,
-        string? installedFamily)
+        string? installedDriver)
     {
         // A playback endpoint turns up twice, once as itself and once as the loopback source
         // that taps it, and both carry the same endpoint id. Provenance is about endpoints,
@@ -88,9 +88,13 @@ public static class CableOwnership
             .Select(g => g.First())
             .ToList();
 
+        // Matched on the driver string rather than on the family, because one vendor ships
+        // several products. VB-Audio's plain cable, their A+B pack and VoiceMeeter's VAIO are
+        // three different drivers that all say "VB-Audio", and installing one of them is no
+        // licence to rename the other two.
         bool Ours(AudioDeviceInfo device) =>
-            installedFamily is not null &&
-            string.Equals(VirtualCableService.FamilyOf(device), installedFamily, StringComparison.OrdinalIgnoreCase);
+            installedDriver is not null &&
+            device.InterfaceName.Contains(installedDriver, StringComparison.OrdinalIgnoreCase);
 
         if (!settings.CableBaselineTaken)
         {
@@ -124,15 +128,19 @@ public static class CableOwnership
     }
 
     /// <summary>
-    /// The cable family the LoopIt7 installer put on this machine, or null when it installed
-    /// none because one was already here.
+    /// The driver string of the cable the LoopIt7 installer put on this machine, or null when
+    /// it installed none because that cable was already here.
     /// <para>
     /// Setup writes this, because setup is the only thing that knows. By the time the app
     /// runs, a cable it installed thirty seconds ago and a cable the user has had for two
     /// years look exactly alike.
     /// </para>
+    /// <para>
+    /// It is the driver string and not the vendor, so that installing VB-Audio's plain cable
+    /// on a machine that also runs VoiceMeeter claims the one and leaves the other alone.
+    /// </para>
     /// </summary>
-    public static string? InstalledCableFamily()
+    public static string? InstalledCableDriver()
     {
         // Setup installs per user by default and only asks for administrator rights when
         // somebody chooses an all users install, so the note lands in whichever of the two

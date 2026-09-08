@@ -8,12 +8,14 @@
 param(
     [string]$Configuration = 'Release',
     [switch]$SkipAssets,
-    [switch]$SkipInstaller
+    [switch]$SkipInstaller,
+    [switch]$SkipTests
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $root 'src\LoopIt7\LoopIt7.csproj'
+$tests = Join-Path $root 'tests\LoopIt7.Tests\LoopIt7.Tests.csproj'
 $publishDir = Join-Path $root 'publish'
 $distDir = Join-Path $root 'dist'
 
@@ -35,6 +37,14 @@ if (-not $dotnet) { throw 'The .NET SDK was not found. Install it from https://d
 if (-not $SkipAssets) {
     Write-Host '== artwork ==' -ForegroundColor DarkYellow
     & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'make-assets.ps1')
+}
+
+# The routing safety rules run before anything is packaged. They open no device and make no
+# sound, so there is no reason for a release to skip them.
+if (-not $SkipTests) {
+    Write-Host '== tests ==' -ForegroundColor DarkYellow
+    & $dotnet run --project $tests -c $Configuration --nologo
+    if ($LASTEXITCODE -ne 0) { throw 'Safety tests failed. Nothing was published.' }
 }
 
 Write-Host '== publish ==' -ForegroundColor DarkYellow

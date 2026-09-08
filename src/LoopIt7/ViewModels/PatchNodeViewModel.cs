@@ -58,6 +58,12 @@ public abstract class PatchNodeViewModel : ObservableObject
     public virtual bool CanAssignApps => false;
 
     /// <summary>
+    /// Whether this box can be given a way in from the rest of Windows. Only a virtual output
+    /// can: everything else on the canvas is already a device, or is one program.
+    /// </summary>
+    public virtual bool CanPublish => false;
+
+    /// <summary>
     /// True for a running program, the only thing that can be taken off its own output.
     /// <para>
     /// Declared here rather than only on the source, because the card template is shared by
@@ -360,11 +366,56 @@ public sealed class VirtualOutputNodeViewModel : PatchNodeViewModel
     /// </summary>
     public System.Collections.ObjectModel.ObservableCollection<Audio.AudioApplication>? Applications { get; set; }
 
+    private string? _inletHint;
+
+    /// <summary>
+    /// What to choose in another program to reach this box, once it has been given a way in
+    /// from the rest of Windows. Null while the box is reachable only from inside LoopIt7,
+    /// which is how every virtual output starts.
+    /// </summary>
+    public string? InletHint
+    {
+        get => _inletHint;
+        set
+        {
+            if (SetProperty(ref _inletHint, value)) OnPropertyChanged(nameof(HasInletHint));
+        }
+    }
+
+    public bool HasInletHint => !string.IsNullOrEmpty(_inletHint);
+
+    private string? _inletBadge;
+
+    /// <summary>
+    /// The short form of the same thing, for the line under the title. "via System" fits on a
+    /// card; the full sentence is the tooltip.
+    /// </summary>
+    public string? InletBadge
+    {
+        get => _inletBadge;
+        set => SetProperty(ref _inletBadge, value);
+    }
+
+    /// <summary>
+    /// The cables that could give this box a way in from Windows, shared with the rest of the
+    /// app. It hangs off the node for the same reason the application list does: the picker
+    /// lives inside the node's card, inside a popup, out of the main view model's reach.
+    /// </summary>
+    public System.Collections.ObjectModel.ObservableCollection<Audio.CableInlet>? Inlets { get; set; }
+
+    /// <summary>
+    /// The cable playback end this box was given, or empty when it has none. Saved with the
+    /// patch so the choice survives a restart.
+    /// </summary>
+    public string InletFeedDeviceId { get; set; } = string.Empty;
+
     public override bool IsSource => true;
 
     public override bool CanReceive => true;
 
     public override bool CanAssignApps => true;
+
+    public override bool CanPublish => true;
 
     public override bool SupportsSolo => false;
 

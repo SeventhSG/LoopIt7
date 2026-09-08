@@ -9,6 +9,25 @@ namespace LoopIt7.Audio;
 /// labels them clearly, and points at a known good one when none are present.
 /// </para>
 /// </summary>
+/// <summary>
+/// One way in to LoopIt7 through a cable: the end another program sends to, and the end
+/// LoopIt7 listens on.
+/// <para>
+/// The two are kept together because a driver can offer several recording ends for one
+/// playback end, as Elgato and VoiceMeeter both do, and choosing the wrong one fails silently:
+/// the patch looks right, the meters stay flat, and nothing says why. So the pair is what gets
+/// offered and what gets picked, rather than a playback end plus a guess.
+/// </para>
+/// </summary>
+public sealed record CableInlet(AudioDeviceInfo Feed, AudioDeviceInfo Pickup)
+{
+    /// <summary>What the other program chooses as its output.</summary>
+    public string Title => Feed.Name;
+
+    /// <summary>The end of the same cable LoopIt7 opens to hear it.</summary>
+    public string Detail => $"LoopIt7 listens on {Pickup.Name}";
+}
+
 public static class VirtualCableService
 {
     /// <summary>Where to get a cable when the machine has none. VB-Audio's is free.</summary>
@@ -60,14 +79,32 @@ public static class VirtualCableService
     /// </summary>
     public static IReadOnlyList<AudioDeviceInfo> FindPickupEndpoints(
         AudioDeviceInfo destination,
-        IEnumerable<AudioDeviceInfo> captureDevices)
+        IEnumerable<AudioDeviceInfo> captureDevices) =>
+        FindOppositeEndpoints(destination, captureDevices, AudioSourceKind.Capture);
+
+    /// <summary>
+    /// The other way round: given the recording end of a cable, the playback ends that feed it.
+    /// The feedback guard needs this. A cable's two ends are separate endpoints as far as
+    /// Windows is concerned, so nothing in the graph can otherwise tell that sending audio to
+    /// one means hearing it come out of the other, which is a loop with a driver in the middle
+    /// and no less loud for it.
+    /// </summary>
+    public static IReadOnlyList<AudioDeviceInfo> FindFeedEndpoints(
+        AudioDeviceInfo pickup,
+        IEnumerable<AudioDeviceInfo> outputDevices) =>
+        FindOppositeEndpoints(pickup, outputDevices, AudioSourceKind.Render);
+
+    private static IReadOnlyList<AudioDeviceInfo> FindOppositeEndpoints(
+        AudioDeviceInfo end,
+        IEnumerable<AudioDeviceInfo> candidateDevices,
+        AudioSourceKind wanted)
     {
-        if (!IsVirtual(destination)) return [];
+        if (!IsVirtual(end)) return [];
 
-        string family = FamilyOf(destination) ?? string.Empty;
+        string family = FamilyOf(end) ?? string.Empty;
 
-        var candidates = captureDevices
-            .Where(d => d.Kind == AudioSourceKind.Capture && IsVirtual(d))
+        var candidates = candidateDevices
+            .Where(d => d.Kind == wanted && IsVirtual(d))
             .Where(d => string.Equals(FamilyOf(d), family, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
@@ -76,10 +113,28 @@ public static class VirtualCableService
         // Several ends from the same driver, as Elgato and VoiceMeeter both have. Prefer the
         // one whose interface string matches exactly before falling back to the whole set.
         var sameInterface = candidates
-            .Where(d => string.Equals(d.InterfaceName, destination.InterfaceName, StringComparison.OrdinalIgnoreCase))
+            .Where(d => string.Equals(d.InterfaceName, end.InterfaceName, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         return sameInterface.Count > 0 ? sameInterface : candidates;
+    }
+
+    /// <summary>
+    /// Every way in to LoopIt7 this machine offers: one entry per pairing of a cable's playback
+    /// end with one of its recording ends. A cable with a single end each way yields exactly one
+    /// entry, which is the ordinary case; a driver with three recording ends yields three, and
+    /// the choice is the user's rather than ours.
+    /// </summary>
+    public static IReadOnlyList<CableInlet> FindInlets(
+        IEnumerable<AudioDeviceInfo> outputDevices,
+        IEnumerable<AudioDeviceInfo> captureDevices)
+    {
+        var captures = captureDevices.ToList();
+
+        return outputDevices
+            .Where(IsVirtual)
+            .SelectMany(feed => FindPickupEndpoints(feed, captures).Select(pickup => new CableInlet(feed, pickup)))
+            .ToList();
     }
 
     /// <summary>One sentence telling the user what to select in the other program.</summary>

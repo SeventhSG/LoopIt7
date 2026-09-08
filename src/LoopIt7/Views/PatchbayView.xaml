@@ -60,23 +60,32 @@
                                        VerticalAlignment="Center"
                                        ToolTip="{Binding PickupHint}" />
 
-                            <!-- Send a program into this virtual output -->
-                            <ToggleButton x:Name="AssignToggle" Grid.Column="2"
-                                          Style="{StaticResource NodeHeaderToggle}" Tag="&#xE710;"
-                                          Margin="0,0,4,0"
-                                          Checked="OnAssignOpened"
-                                          Visibility="{Binding CanAssignApps, Converter={StaticResource BoolToVisibility}}"
-                                          ToolTip="Send a program's audio into this virtual output"
-                                          AutomationProperties.Name="Assign a program" />
+                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                <!-- Send a program into this virtual output -->
+                                <ToggleButton x:Name="AssignToggle"
+                                              Style="{StaticResource NodeHeaderToggle}" Tag="&#xE710;"
+                                              Margin="0,0,4,0"
+                                              Checked="OnAssignOpened"
+                                              Visibility="{Binding CanAssignApps, Converter={StaticResource BoolToVisibility}}"
+                                              ToolTip="Send a program's audio into this virtual output"
+                                              AutomationProperties.Name="Assign a program" />
 
-                            <!-- Take a program off its own output -->
-                            <ToggleButton Grid.Column="2"
-                                          Style="{StaticResource NodeHeaderToggle}" Tag="&#xE8AB;"
-                                          Margin="0,0,4,0"
-                                          IsChecked="{Binding Exclusive}"
-                                          Visibility="{Binding SupportsExclusive, Converter={StaticResource BoolToVisibility}}"
-                                          ToolTip="Take this program off its own output, so you only hear it where LoopIt7 sends it"
-                                          AutomationProperties.Name="Only through LoopIt7" />
+                                <!-- Give this box a way in from the rest of Windows -->
+                                <ToggleButton x:Name="InletToggle"
+                                              Style="{StaticResource NodeHeaderToggle}" Tag="&#xE71B;"
+                                              Margin="0,0,4,0"
+                                              Visibility="{Binding CanPublish, Converter={StaticResource BoolToVisibility}}"
+                                              ToolTip="Give this box a way in from Windows, so other programs can pick it as their output"
+                                              AutomationProperties.Name="Give this box a way in" />
+
+                                <!-- Take a program off its own output -->
+                                <ToggleButton Style="{StaticResource NodeHeaderToggle}" Tag="&#xE8AB;"
+                                              Margin="0,0,4,0"
+                                              IsChecked="{Binding Exclusive}"
+                                              Visibility="{Binding SupportsExclusive, Converter={StaticResource BoolToVisibility}}"
+                                              ToolTip="Take this program off its own output, so you only hear it where LoopIt7 sends it"
+                                              AutomationProperties.Name="Only through LoopIt7" />
+                            </StackPanel>
 
                             <Button Grid.Column="3" Style="{StaticResource IconButtonDanger}"
                                     Width="20" Height="20"
@@ -127,6 +136,51 @@
                                     </StackPanel>
                                 </Border>
                             </Popup>
+
+                            <!--
+                                The cable picker. A virtual output starts reachable only from
+                                inside LoopIt7; this is what gives it a name in everybody else's
+                                device list, by borrowing a cable that is already installed.
+                            -->
+                            <Popup Grid.Column="2" Placement="Bottom" PlacementTarget="{Binding ElementName=InletToggle}"
+                                   HorizontalOffset="-236" VerticalOffset="8"
+                                   IsOpen="{Binding IsChecked, ElementName=InletToggle, Mode=TwoWay}"
+                                   StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
+                                <Border Background="{StaticResource SurfaceHiBrush}"
+                                        BorderBrush="{StaticResource LineStrongBrush}"
+                                        BorderThickness="1" CornerRadius="{StaticResource SurfaceRadius}"
+                                        Width="300" Padding="8" Margin="12">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="24" ShadowDepth="6" Direction="270" Color="#000000" Opacity="0.55" />
+                                    </Border.Effect>
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource Caption}" Margin="10,6,10,6"
+                                                   TextWrapping="Wrap"
+                                                   Text="Pick a cable. Other programs choose it as their output, and what they play arrives here." />
+                                        <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Disabled">
+                                            <ItemsControl x:Name="InletList" ItemsSource="{Binding Inlets}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button Style="{StaticResource MenuRowButton}"
+                                                                Click="OnInletClick"
+                                                                Tag="{Binding DataContext, ElementName=InletList}">
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                                                <TextBlock Style="{StaticResource Caption}" FontSize="11"
+                                                                           Margin="0,2,0,0" Text="{Binding Detail}" />
+                                                            </StackPanel>
+                                                        </Button>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                        <TextBlock Style="{StaticResource Caption}" Margin="10,8,10,4"
+                                                   TextWrapping="Wrap" FontSize="11"
+                                                   Text="Cables already on this machine keep their own names. LoopIt7 only renames one it installed itself." />
+                                    </StackPanel>
+                                </Border>
+                            </Popup>
                         </Grid>
 
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,3,0,0">
@@ -137,6 +191,12 @@
                             <TextBlock Style="{StaticResource Caption}" FontSize="11"
                                        Margin="8,0,0,0" Text="{Binding RouteText}"
                                        Foreground="{StaticResource AccentBrush}" />
+                            <TextBlock Style="{StaticResource Caption}" FontSize="11"
+                                       Margin="8,0,0,0" Text="{Binding InletBadge}"
+                                       MaxWidth="140" TextTrimming="CharacterEllipsis"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       ToolTip="{Binding InletHint}"
+                                       Visibility="{Binding HasInletHint, Converter={StaticResource BoolToVisibility}, FallbackValue=Collapsed}" />
                             <TextBlock Text="{Binding StatusText}" Margin="8,0,0,0">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">

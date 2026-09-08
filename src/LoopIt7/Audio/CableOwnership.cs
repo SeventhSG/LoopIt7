@@ -67,7 +67,17 @@ public static class CableOwnership
     /// </para>
     /// </summary>
     /// <returns>True when something was recorded, so the caller knows to save.</returns>
-    public static bool ObserveCables(AppSettings settings, IEnumerable<AudioDeviceInfo> devices)
+    public static bool ObserveCables(AppSettings settings, IEnumerable<AudioDeviceInfo> devices) =>
+        ObserveCables(settings, devices, InstalledCableFamily());
+
+    /// <summary>
+    /// The same, told rather than asked what setup installed. Splitting it out is what lets
+    /// the rule be checked without a marker file on the machine running the checks.
+    /// </summary>
+    public static bool ObserveCables(
+        AppSettings settings,
+        IEnumerable<AudioDeviceInfo> devices,
+        string? installedFamily)
     {
         // A playback endpoint turns up twice, once as itself and once as the loopback source
         // that taps it, and both carry the same endpoint id. Provenance is about endpoints,
@@ -78,11 +88,9 @@ public static class CableOwnership
             .Select(g => g.First())
             .ToList();
 
-        string? installed = InstalledCableFamily();
-
         bool Ours(AudioDeviceInfo device) =>
-            installed is not null &&
-            string.Equals(VirtualCableService.FamilyOf(device), installed, StringComparison.OrdinalIgnoreCase);
+            installedFamily is not null &&
+            string.Equals(VirtualCableService.FamilyOf(device), installedFamily, StringComparison.OrdinalIgnoreCase);
 
         if (!settings.CableBaselineTaken)
         {
@@ -142,7 +150,9 @@ public static class CableOwnership
 
                 if (!File.Exists(path)) continue;
 
-                string family = File.ReadAllText(path).Trim();
+                // First line is the cable family. Setup writes the version it installed on
+                // the second, so it can tell later whether it has a newer one to offer.
+                string family = File.ReadLines(path).FirstOrDefault()?.Trim() ?? string.Empty;
                 if (family.Length > 0) return family;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

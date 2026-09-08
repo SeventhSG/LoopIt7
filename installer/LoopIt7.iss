@@ -17,6 +17,9 @@
 ; back to sending the user to vb-audio.com itself.
 #define CableSetup     "cable\VBCABLE_Setup_x64.exe"
 #define CableFamily    "VB-Audio Cable"
+; Bump this whenever the redistributable in installer\cable\ is replaced with a newer
+; one. It is what tells an upgrade that the cable already on the machine is out of date.
+#define CableVersion   "1.0.3.8"
 #if FileExists(AddBackslash(SourcePath) + CableSetup)
   #define BundleCable
 #endif
@@ -70,14 +73,17 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Offered only when this machine has no cable at all. Somebody who already runs VoiceMeeter
 ; or a VB-Audio cable does not need a second one, and installing one anyway would leave them
 ; with a driver they never asked for.
-Name: "cable"; Description: "Install a virtual audio cable, so other programs can send audio to LoopIt7";     GroupDescription: "Virtual audio cable:"; Check: not CableInstalled
+Name: "cable"; Description: "Install a virtual audio cable, so other programs can send audio to LoopIt7"; GroupDescription: "Virtual audio cable:"; Check: not CableInstalled
+; A cable LoopIt7 installed is LoopIt7's to keep current. Without this the check above
+; would see a cable present on every later upgrade and quietly skip it forever.
+Name: "cableupdate"; Description: "Update the virtual audio cable LoopIt7 installed"; GroupDescription: "Virtual audio cable:"; Check: OurCableIsOutOfDate
 #endif
 
 [Files]
 Source: "..\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\README.txt"; DestDir: "{app}"; Flags: ignoreversion
 #ifdef BundleCable
-Source: "{#CableSetup}"; DestDir: "{tmp}"; Flags: deleteafterinstall; Tasks: cable
+Source: "{#CableSetup}"; DestDir: "{tmp}"; Flags: deleteafterinstall; Tasks: cable cableupdate
 #endif
 
 [Icons]
@@ -88,7 +94,7 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 #ifdef BundleCable
 ; VB-Audio's installer asks for administrator rights itself, which is why this goes through
 ; the shell rather than being run directly: LoopIt7's own setup stays unelevated.
-Filename: "{tmp}\VBCABLE_Setup_x64.exe"; Parameters: "-i -h";     StatusMsg: "Installing the virtual audio cable...";     Flags: shellexec waituntilterminated; Tasks: cable
+Filename: "{tmp}\VBCABLE_Setup_x64.exe"; Parameters: "-i -h"; StatusMsg: "Installing the virtual audio cable..."; Flags: shellexec waituntilterminated; Tasks: cable cableupdate
 #endif
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
@@ -130,6 +136,41 @@ var
 { Whether this machine already has a virtual audio cable of any make on it. Somebody who
   already runs VoiceMeeter or a VB-Audio cable does not need a second one, and installing one
   anyway would leave them with a driver they never asked for. }
+{ The cable version LoopIt7 last installed, from the note setup left beside the settings.
+  Empty when we installed none, which is the ordinary case on a machine that already had one. }
+function OurCableVersion(): String;
+var
+  Lines: TArrayOfString;
+  Marker: String;
+begin
+  Result := '';
+
+  Marker := ExpandConstant('{autoappdata}\LoopIt7\installed-cable.txt');
+  if not FileExists(Marker) then
+    Marker := ExpandConstant('{commonappdata}\LoopIt7\installed-cable.txt');
+
+  if not FileExists(Marker) then Exit;
+  if not LoadStringsFromFile(Marker, Lines) then Exit;
+
+  { First line is the family, second the version. An older note has no second line, which
+    reads as "unknown" and therefore as out of date, which is the safe way round. }
+  if GetArrayLength(Lines) >= 2 then
+    Result := Trim(Lines[1]);
+end;
+
+{ Whether the cable LoopIt7 put here is older than the one this setup carries. Only ever true
+  for a cable we installed: one the user had already is not ours to update. }
+function OurCableIsOutOfDate(): Boolean;
+var
+  Marker: String;
+begin
+  Marker := ExpandConstant('{autoappdata}\LoopIt7\installed-cable.txt');
+  if not FileExists(Marker) then
+    Marker := ExpandConstant('{commonappdata}\LoopIt7\installed-cable.txt');
+
+  Result := FileExists(Marker) and (OurCableVersion() <> '{#CableVersion}');
+end;
+
 function CableInstalled(): Boolean;
 var
   Endpoints: TArrayOfString;
@@ -312,13 +353,13 @@ begin
   if CurStep <> ssPostInstall then Exit;
 
 #ifdef BundleCable
-  if not WizardIsTaskSelected('cable') then Exit;
+  if not (WizardIsTaskSelected('cable') or WizardIsTaskSelected('cableupdate')) then Exit;
 
   MarkerDir := ExpandConstant('{autoappdata}\LoopIt7');
   if not DirExists(MarkerDir) then
     ForceDirectories(MarkerDir);
 
-  SaveStringToFile(MarkerDir + '\installed-cable.txt', '{#CableFamily}', False);
+  SaveStringToFile(MarkerDir + '\installed-cable.txt', '{#CableFamily}' + #13#10 + '{#CableVersion}', False);
 #endif
 end;
 

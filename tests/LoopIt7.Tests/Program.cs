@@ -322,6 +322,35 @@ bool Guard(
         plainFeed.Display == "Efe (LoopIt7)", $"got '{plainFeed.Display}'");
 }
 
+// A cable the LoopIt7 installer put there. Setup leaves a note saying so, because by the
+// time the app first runs it is indistinguishable from one the user has had for years, and
+// without the note we would refuse to rename the very cable we installed for them.
+{
+    var installed = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{fresh}", "CABLE Input", "VB-Audio Virtual Cable",
+        AudioSourceKind.Render, false);
+
+    var theirElgato = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{elgato}", "System", "Elgato Virtual Audio",
+        AudioSourceKind.Render, false);
+
+    var settings = new AppSettings();
+    CableOwnership.ObserveCables(settings, [installed, theirElgato], "VB-Audio Cable");
+
+    Check("a cable setup installed is ours from the first look",
+        CableOwnership.MayClaim(settings, installed), "it was not claimable");
+
+    Check("and anything else on the machine still is not",
+        !CableOwnership.MayClaim(settings, theirElgato), "the Elgato became claimable");
+
+    // Without the note, the same machine reads completely differently.
+    var blind = new AppSettings();
+    CableOwnership.ObserveCables(blind, [installed, theirElgato], null);
+
+    Check("without the note the same cable would be left alone",
+        !CableOwnership.MayClaim(blind, installed), "it was claimable with no note");
+}
+
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "all checks passed" : $"{failures} check(s) failed");
 return failures == 0 ? 0 : 1;

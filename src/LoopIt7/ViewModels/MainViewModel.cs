@@ -607,6 +607,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return false;
         }
 
+        var taken = VirtualOutputs.FirstOrDefault(box =>
+            box != target &&
+            string.Equals(box.InletFeedDeviceId, feed.Id, StringComparison.OrdinalIgnoreCase));
+
+        if (taken is not null)
+        {
+            // A cable carries one stream. Pointed at two boxes it would deliver the same audio
+            // to both, and there would be two boxes claiming to be the same Windows device.
+            Notice = error = $"{feed.Name} is already the way in to {taken.Title}. A cable carries one thing at a time, so give {target.Title} a different one, or install another cable.";
+            return false;
+        }
+
         var source = Sources.FirstOrDefault(s =>
                          s.Kind == SourceKind.Device &&
                          string.Equals(s.DeviceId, pickup.Id, StringComparison.OrdinalIgnoreCase))
@@ -796,6 +808,30 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         foreach (var source in Sources) source.Solo = false;
     }
 
+    /// <summary>
+    /// Hands back the cable a box was given, when the box goes. Without this, deleting a
+    /// virtual output would leave a Windows device still carrying its name, pointing at
+    /// something that no longer exists anywhere in the app.
+    /// </summary>
+    private void ReleaseInlet(PatchNodeViewModel node)
+    {
+        if (node is not VirtualOutputNodeViewModel box) return;
+        if (box.InletFeedDeviceId.Length == 0) return;
+
+        var feed = OutputDevices.FirstOrDefault(
+            d => string.Equals(d.Id, box.InletFeedDeviceId, StringComparison.OrdinalIgnoreCase));
+
+        if (feed is not null && CableOwnership.FindClaim(_settings, feed) is { } claim)
+        {
+            CableOwnership.TryRelease(_settings, claim, OutputDevices.Concat(InputDevices), out _);
+            _settingsService.Save(_settings);
+        }
+
+        box.InletFeedDeviceId = string.Empty;
+        box.InletHint = null;
+        box.InletBadge = null;
+    }
+
     public void RemoveNode(PatchNodeViewModel node)
     {
         foreach (var cable in Cables.Where(c => c.Source == node || c.Destination == node).ToList())
@@ -804,6 +840,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         ReleaseExclusive(node.Id);
+        ReleaseInlet(node);
         _graph.RemoveNode(node.Id);
 
         if (node is SourceNodeViewModel source) Sources.Remove(source);

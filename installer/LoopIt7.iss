@@ -16,7 +16,10 @@
 ; is written to build and work identically without it: no file, no task, and the app falls
 ; back to sending the user to vb-audio.com itself.
 #define CableSetup     "cable\VBCABLE_Setup_x64.exe"
-#define CableFamily    "VB-Audio Cable"
+; The driver string VB-Audio's plain cable reports, and the thing setup looks for. Their
+; A+B pack and VoiceMeeter's VAIO are different drivers that also say VB-Audio, so this
+; is deliberately the whole product name and not just the vendor.
+#define CableDriver    "VB-Audio Virtual Cable"
 ; Bump this whenever the redistributable in installer\cable\ is replaced with a newer
 ; one. It is what tells an upgrade that the cable already on the machine is out of date.
 #define CableVersion   "1.0.3.8"
@@ -70,9 +73,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 #ifdef BundleCable
-; Offered only when this machine has no cable at all. Somebody who already runs VoiceMeeter
-; or a VB-Audio cable does not need a second one, and installing one anyway would leave them
-; with a driver they never asked for.
+; Offered whenever this exact cable is missing, even on a machine that already has cables of
+; another make. Those belong to somebody else's setup, and a cable LoopIt7 may not rename is a
+; cable that cannot carry the user's own name into Discord.
 Name: "cable"; Description: "Install a virtual audio cable, so other programs can send audio to LoopIt7"; GroupDescription: "Virtual audio cable:"; Check: not CableInstalled
 ; A cable LoopIt7 installed is LoopIt7's to keep current. Without this the check above
 ; would see a cable present on every later upgrade and quietly skip it forever.
@@ -133,9 +136,6 @@ var
 
 { The version already on this machine, per user or for all users, or empty when LoopIt7 has
   never been installed here. }
-{ Whether this machine already has a virtual audio cable of any make on it. Somebody who
-  already runs VoiceMeeter or a VB-Audio cable does not need a second one, and installing one
-  anyway would leave them with a driver they never asked for. }
 { The cable version LoopIt7 last installed, from the note setup left beside the settings.
   Empty when we installed none, which is the ordinary case on a machine that already had one. }
 function OurCableVersion(): String;
@@ -171,6 +171,12 @@ begin
   Result := FileExists(Marker) and (OurCableVersion() <> '{#CableVersion}');
 end;
 
+{ Whether VB-Audio's plain cable is already on this machine.
+  Deliberately not "any cable at all". Somebody running Wave Link, NVIDIA Broadcast or
+  VoiceMeeter has cables, but they are wired into their own setup and are not ours to rename,
+  so without one of our own LoopIt7 could never put its name on anything. They get the offer
+  too. The one case to avoid is this exact cable already being here: running its installer
+  again would not add a second, it would hand us the user's own cable to rename. }
 function CableInstalled(): Boolean;
 var
   Endpoints: TArrayOfString;
@@ -186,11 +192,7 @@ begin
     if RegQueryStringValue(HKLM64, RenderEndpoints + '\' + Endpoints[I] + '\Properties',
         InterfaceNameValue, Iface) then
     begin
-      Iface := Lowercase(Iface);
-
-      if (Pos('vb-audio', Iface) > 0) or (Pos('voicemeeter', Iface) > 0)
-        or (Pos('virtual audio cable', Iface) > 0) or (Pos('elgato virtual audio', Iface) > 0)
-        or (Pos('nvidia virtual audio', Iface) > 0) or (Pos('virtual cable', Iface) > 0) then
+      if Pos(Lowercase('{#CableDriver}'), Lowercase(Iface)) > 0 then
       begin
         Result := True;
         Exit;
@@ -359,7 +361,7 @@ begin
   if not DirExists(MarkerDir) then
     ForceDirectories(MarkerDir);
 
-  SaveStringToFile(MarkerDir + '\installed-cable.txt', '{#CableFamily}' + #13#10 + '{#CableVersion}', False);
+  SaveStringToFile(MarkerDir + '\installed-cable.txt', '{#CableDriver}' + #13#10 + '{#CableVersion}', False);
 #endif
 end;
 

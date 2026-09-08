@@ -85,8 +85,17 @@ that does, it uses whatever cable is already installed and names both of its end
 user.
 
 A virtual output can be given a way in from Windows by binding it to a cable: the other
-program sends to the cable's playback end, LoopIt7 listens on its recording end. Which
-cables LoopIt7 may rename is decided in `CableOwnership`, and the rule is narrow on
+program sends to the cable's playback end, LoopIt7 listens on its recording end. One cable
+serves one box, so how many boxes Windows can see is how many cables are installed.
+
+The installer bundles VB-Audio's cable when their redistributable is sitting in
+`installer/cable/`, and builds and works without it when it is not, so the licensing answer
+changes a file rather than the script. Shipping that file needs a distribution agreement
+with VB-Audio. When setup does install a cable it writes the family name to
+`installed-cable.txt` beside the settings, because by the time the app runs, a cable
+installed thirty seconds ago and one the user has had for years look identical.
+
+Which cables LoopIt7 may rename is decided in `CableOwnership`, and the rule is narrow on
 purpose. A cable that was on the machine before LoopIt7 ever asked for one is never
 renamed, because other people's OBS scenes and Discord settings point at that name. Only a
 cable that arrived *after* the user followed LoopIt7's own prompt to get one is ours to

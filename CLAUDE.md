@@ -20,9 +20,12 @@ leave Start routing to the user and tell them to turn the output down first. A p
 sends a playback device's loopback back into that same device reaches full scale in under
 a second, in whatever the user is wearing.
 
-The app guards against that case in `MainViewModel.TryConnect`, which refuses the
-connection rather than warning. Keep that guard, and extend it if a new node type can
-create the same loop.
+The app guards against that case in `FeedbackGuard.WouldFeedBack`, called from
+`MainViewModel.TryConnect`, which refuses the connection rather than warning. Keep that
+guard, and extend it if a new node type can create the same loop. It covers three shapes
+now: a chain of virtual outputs closing on itself, a loopback tap reaching its own device,
+and a cable whose recording end comes back round to its own playback end. Each one has a
+check in `tests\LoopIt7.Tests`, and `build.ps1` refuses to publish if they fail.
 
 ## Layout
 
@@ -33,12 +36,14 @@ src/LoopIt7/
     Interop/        WASAPI process loopback, the per application capture path
     *SampleProvider Gain with pan, delay line, channel map
     DeviceService   Endpoint enumeration and change notifications
+    EndpointNaming  Renames an endpoint; CableOwnership decides which ones we may rename
     EndpointControl IPolicyConfig: default device, shared engine format
     VirtualCableService  Detects installed cables and pairs their two ends
   Midi/             MIDI input to output routing
   ViewModels/       MainViewModel is the mixer; PatchNodeViewModel is one box
   Views/            PatchbayView is the canvas, plus Devices and MIDI
   Themes/           Tokens.xaml holds the palette and the shape rules
+tests/LoopIt7.Tests  The feedback guard and the cable end pairing. No window, no devices
 driver/             Scaffolding towards a LoopIt7 Cable, and what it would take
 build/              make-assets.ps1 draws every raster; build.ps1 does the whole pipeline
 ```
@@ -58,7 +63,8 @@ queues: two independent clocks drift, and untrimmed drift becomes a late monitor
 
 ```powershell
 dotnet build src\LoopIt7\LoopIt7.csproj -c Release       # app only
-powershell -File build\build.ps1                         # artwork, publish, installer
+dotnet run --project tests\LoopIt7.Tests                 # routing safety rules, headless
+powershell -File build\build.ps1                         # tests, artwork, publish, installer
 powershell -File build\screenshot.ps1 -Out assets\x.png  # capture the running window
 LoopIt7.exe --self-test                                  # writes %AppData%\LoopIt7\self-test.txt
 ```

@@ -217,6 +217,21 @@ public partial class PatchbayView : UserControl
     }
 
     /// <summary>
+    /// Gives a virtual output a way in from Windows, through the cable that was clicked. The
+    /// view model puts its own reason on screen if it refuses, because it is the only thing
+    /// that knows what else is already patched.
+    /// </summary>
+    private void OnInletClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement element) return;
+        if (element.DataContext is not CableInlet inlet) return;
+        if (element.Tag is not VirtualOutputNodeViewModel target) return;
+
+        _viewModel?.TryPublishVirtualOutput(target, inlet, out _);
+        ClosePopupAround(element);
+    }
+
+    /// <summary>
     /// Shuts the popup the clicked row lives in. A popup keeps its own visual tree, so the
     /// way back out is the logical one.
     /// </summary>

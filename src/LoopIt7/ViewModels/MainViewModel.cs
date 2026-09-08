@@ -152,6 +152,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<AudioDeviceInfo> LoopbackDevices { get; } = [];
 
     public ObservableCollection<AudioDeviceInfo> OutputDevices { get; } = [];
+
+    /// <summary>
+    /// The ways in to LoopIt7 this machine offers, one per cable end pairing. Kept as its own
+    /// list because the picker that uses it lives inside a node's card, where the main view
+    /// model is out of reach, exactly like the application list.
+    /// </summary>
+    public ObservableCollection<CableInlet> CableInlets { get; } = [];
     public ObservableCollection<AudioApplication> Applications { get; } = [];
     public ObservableCollection<DeviceRowViewModel> DeviceRows { get; } = [];
 
@@ -518,7 +525,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         var vm = new VirtualOutputNodeViewModel(saved?.Id ?? NewId(), saved?.Title ?? name)
         {
-            Applications = Applications
+            Applications = Applications,
+            Inlets = CableInlets,
+            InletFeedDeviceId = saved?.InletFeedDeviceId ?? string.Empty
         };
         PlaceNode(vm, saved, LaneVirtualX, VirtualOutputs.Count);
         WireNode(vm);
@@ -564,6 +573,67 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         source.Exclusive = true;
         Notice = $"{source.Title} now plays through {target.Title} only. Send {target.Title} to every output that should hear it.";
+    }
+
+    /// <summary>
+    /// Gives a virtual output a way in from the rest of Windows, so other programs can send
+    /// audio to it instead of only being captured into it.
+    /// <para>
+    /// A cable has a playback end and a recording end. The other program picks the playback
+    /// end as its output, LoopIt7 listens on the recording end, and what arrives lands in this
+    /// box and leaves down whatever cables the box already has. That is the whole trick, and
+    /// it is why a virtual output can look like a device to Discord without LoopIt7 shipping a
+    /// driver of its own.
+    /// </para>
+    /// <para>
+    /// If the cable is one LoopIt7 installed, both of its ends are renamed after the box, so
+    /// the name in Discord's list is the name on the canvas. A cable that was already on the
+    /// machine keeps the name it came with, because somebody else's OBS scene may be pointing
+    /// at it.
+    /// </para>
+    /// </summary>
+    public bool TryPublishVirtualOutput(
+        VirtualOutputNodeViewModel target,
+        CableInlet inlet,
+        out string? error)
+    {
+        var feed = inlet.Feed;
+        var pickup = inlet.Pickup;
+
+        if (!VirtualCableService.IsVirtual(feed))
+        {
+            Notice = error = $"{feed.Name} is a real output, not a cable. Only a cable has a recording end for LoopIt7 to listen on.";
+            return false;
+        }
+
+        var source = Sources.FirstOrDefault(s =>
+                         s.Kind == SourceKind.Device &&
+                         string.Equals(s.DeviceId, pickup.Id, StringComparison.OrdinalIgnoreCase))
+                     ?? AddDeviceSource(pickup, loopback: false);
+
+        if (!Cables.Any(c => c.Source == source && c.Destination == target) &&
+            !TryConnect(source, target))
+        {
+            // TryConnect has already put its own reason on screen, and that reason is more
+            // specific than anything worth writing here.
+            Notice ??= $"{pickup.Name} could not be patched into {target.Title}.";
+            error = Notice;
+            return false;
+        }
+
+        if (CableOwnership.IsOwned(_settings, feed))
+        {
+            CableOwnership.TryClaim(_settings, feed, pickup, target.Title, out _);
+        }
+
+        target.InletFeedDeviceId = feed.Id;
+        target.InletHint = $"Choose \"{feed.Name}\" as the output in any program that should play through {target.Title}. LoopIt7 listens on \"{pickup.Name}\".";
+        target.InletBadge = $"via {feed.Name}";
+        Persist();
+
+        Notice = $"{target.Title} is reachable from Windows now. {target.InletHint}";
+        error = null;
+        return true;
     }
 
     private DestinationNodeViewModel AddDestination(AudioDeviceInfo device, NodeSettings? saved = null)
@@ -728,7 +798,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         // A feedback loop builds to full scale in under a second, and it does that in
         // somebody's headphones, so it is refused rather than warned about.
-        if (WouldFeedBack(source, destination, out string reason))
+        if (FeedbackGuard.WouldFeedBack(
+                source, destination, Cables, Sources, InputDevices, OutputDevices, out string reason))
         {
             Notice = reason;
             return false;
@@ -748,69 +819,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Cables.Add(cable);
         Finish();
         return true;
-    }
-
-    /// <summary>
-    /// Everything the audio leaving this box can reach, following cables through any virtual
-    /// outputs on the way. The optional extra edge is the cable being considered, so a patch
-    /// can be judged before it exists.
-    /// </summary>
-    private HashSet<PatchNodeViewModel> Downstream(
-        PatchNodeViewModel start,
-        PatchNodeViewModel? extraFrom = null,
-        PatchNodeViewModel? extraTo = null)
-    {
-        var seen = new HashSet<PatchNodeViewModel>();
-        var pending = new Stack<PatchNodeViewModel>();
-        pending.Push(start);
-
-        while (pending.Count > 0)
-        {
-            var node = pending.Pop();
-            if (!seen.Add(node)) continue;
-
-            // Only a source or a virtual output passes anything on. A real endpoint is the end.
-            if (!node.CanSend) continue;
-
-            foreach (var cable in Cables)
-            {
-                if (cable.Source == node) pending.Push(cable.Destination);
-            }
-
-            if (extraFrom is not null && extraTo is not null && node == extraFrom) pending.Push(extraTo);
-        }
-
-        return seen;
-    }
-
-    /// <summary>
-    /// Whether patching this pair would let audio arrive back where it came from. Two ways
-    /// that can happen now: a chain of virtual outputs that closes on itself, and a device
-    /// tapped in loopback that reaches that same device again, however many boxes are in
-    /// between.
-    /// </summary>
-    private bool WouldFeedBack(PatchNodeViewModel from, PatchNodeViewModel to, out string reason)
-    {
-        if (ReferenceEquals(from, to) || Downstream(to).Contains(from))
-        {
-            reason = $"That would run {to.Title} back into itself. Audio going round a loop with nothing in the way reaches full scale almost at once.";
-            return true;
-        }
-
-        foreach (var tap in Sources.Where(s => s.Kind == SourceKind.DeviceLoopback))
-        {
-            foreach (var node in Downstream(tap, from, to))
-            {
-                if (node is not DestinationNodeViewModel endpoint) continue;
-                if (endpoint.DeviceId != tap.DeviceId) continue;
-
-                reason = $"That would feed {endpoint.Title} back into itself through {tap.Title}. You are already hearing this audio there.";
-                return true;
-            }
-        }
-
-        reason = string.Empty;
-        return false;
     }
 
     public void RemoveCable(CableViewModel cable, bool persist = true)
@@ -1011,6 +1019,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // Device and application discovery
 
+    private static void Sync<T>(ObservableCollection<T> target, IReadOnlyList<T> fresh)
+    {
+        target.Clear();
+        foreach (var item in fresh) target.Add(item);
+    }
+
     private void RefreshDevices()
     {
         var sources = _devices.GetInputSources();
@@ -1018,6 +1032,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         SyncDevices(CaptureDevices, [.. sources.Where(d => d.Kind == AudioSourceKind.Capture)]);
         SyncDevices(LoopbackDevices, [.. sources.Where(d => d.Kind == AudioSourceKind.Loopback)]);
         SyncDevices(OutputDevices, _devices.GetOutputs());
+        Sync(CableInlets, VirtualCableService.FindInlets(OutputDevices, InputDevices));
         OnPropertyChanged(nameof(HasVirtualCable));
     }
 
@@ -1244,8 +1259,52 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             created.DelayMs = cable.DelayMs;
         }
 
+        RestoreInletHints();
+
         _loading = wasLoading;
         OnPropertyChanged(nameof(HasNodes));
+    }
+
+    /// <summary>
+    /// Puts the "way in from Windows" label back on the cards that had one. The patch itself is
+    /// saved, so this is only the wording, and it is rebuilt from the endpoint the user actually
+    /// chose rather than worked out again, which on a driver with several recording ends would
+    /// be a different answer from the one they picked.
+    /// </summary>
+    private void RestoreInletHints()
+    {
+        foreach (var box in VirtualOutputs)
+        {
+            if (box.InletFeedDeviceId.Length == 0) continue;
+
+            var feed = OutputDevices.FirstOrDefault(
+                d => string.Equals(d.Id, box.InletFeedDeviceId, StringComparison.OrdinalIgnoreCase));
+
+            if (feed is null)
+            {
+                // The cable is gone: unplugged, uninstalled, or a driver update renamed it.
+                // Saying nothing is better than pointing at a device that is not there.
+                box.InletFeedDeviceId = string.Empty;
+                box.InletHint = null;
+                box.InletBadge = null;
+                continue;
+            }
+
+            var pickup = Cables
+                .Where(c => c.Destination == box)
+                .Select(c => c.Source)
+                .OfType<SourceNodeViewModel>()
+                .Where(src => src.Kind == SourceKind.Device)
+                .Select(src => InputDevices.FirstOrDefault(
+                    d => d.Id == src.DeviceId && d.Kind == AudioSourceKind.Capture))
+                .FirstOrDefault(d => d is not null && VirtualCableService.IsVirtual(d));
+
+            box.InletHint = pickup is null
+                ? $"Choose \"{feed.Name}\" as the output in any program that should play through {box.Title}."
+                : $"Choose \"{feed.Name}\" as the output in any program that should play through {box.Title}. LoopIt7 listens on \"{pickup.Name}\".";
+
+            box.InletBadge = $"via {feed.Name}";
+        }
     }
 
     private PatchNodeViewModel RestoreDeviceSource(NodeSettings saved)
@@ -1315,6 +1374,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 Kind = "VirtualOutput",
                 Title = virtualOutput.Title,
                 Subtitle = virtualOutput.Subtitle,
+                InletFeedDeviceId = virtualOutput.InletFeedDeviceId,
                 X = virtualOutput.X,
                 Y = virtualOutput.Y,
                 GainDb = virtualOutput.GainDb,

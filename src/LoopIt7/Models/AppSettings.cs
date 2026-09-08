@@ -20,6 +20,13 @@ public sealed class NodeSettings
     /// <summary>Executable name for application nodes, used to find the program again.</summary>
     public string ExecutableName { get; set; } = string.Empty;
 
+    /// <summary>
+    /// For a virtual output that has been given a way in from Windows: the cable's playback
+    /// end, the one other programs choose. Stored because a driver can offer several ends and
+    /// working it out again on load would be a fresh guess, not the user's choice.
+    /// </summary>
+    public string InletFeedDeviceId { get; set; } = string.Empty;
+
     public double X { get; set; }
     public double Y { get; set; }
     public double GainDb { get; set; }
@@ -62,6 +69,28 @@ public sealed class PatchPreset
     public List<CableSettings> Cables { get; set; } = [];
 }
 
+/// <summary>
+/// A cable LoopIt7 installed and renamed, and the names it had before, so removing the claim
+/// puts the machine back exactly as it was found. Cables that were already on the machine are
+/// never recorded here, because they are never renamed.
+/// </summary>
+public sealed class CableClaimSettings
+{
+    /// <summary>The playback end, the one other programs pick as a speaker.</summary>
+    public string RenderEndpointId { get; set; } = string.Empty;
+
+    /// <summary>The recording end, the one other programs pick as a microphone.</summary>
+    public string CaptureEndpointId { get; set; } = string.Empty;
+
+    /// <summary>The name LoopIt7 gave it, without the bracketed half.</summary>
+    public string ClaimedName { get; set; } = string.Empty;
+
+    public string OriginalRenderName { get; set; } = string.Empty;
+    public string OriginalRenderInterface { get; set; } = string.Empty;
+    public string OriginalCaptureName { get; set; } = string.Empty;
+    public string OriginalCaptureInterface { get; set; } = string.Empty;
+}
+
 public sealed class AppSettings
 {
     /// <summary>WASAPI buffer size per endpoint. 3, 5, 10, 20 or 40.</summary>
@@ -71,6 +100,9 @@ public sealed class AppSettings
     public List<CableSettings> Cables { get; set; } = [];
     public List<MidiRouteSettings> MidiRoutes { get; set; } = [];
     public List<PatchPreset> Presets { get; set; } = [];
+
+    /// <summary>Cables LoopIt7 installed, renamed, and must put back if it is removed.</summary>
+    public List<CableClaimSettings> ClaimedCables { get; set; } = [];
 
     public bool StartWithWindows { get; set; }
     public bool StartMinimized { get; set; }

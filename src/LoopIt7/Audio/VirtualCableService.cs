@@ -35,18 +35,18 @@ public static class VirtualCableService
 
     public const string RecommendedCableName = "VB-Audio Virtual Cable";
 
-    private static readonly (string Fragment, string Family)[] KnownCables =
+    private static readonly (string Fragment, string Family, string Vendor)[] KnownCables =
     [
-        ("cable input", "VB-Audio Cable"),
-        ("cable output", "VB-Audio Cable"),
-        ("vb-audio", "VB-Audio Cable"),
-        ("voicemeeter", "VoiceMeeter"),
-        ("virtual audio cable", "Virtual Audio Cable"),
-        ("elgato virtual audio", "Elgato"),
-        ("nvidia virtual audio", "NVIDIA Broadcast"),
-        ("steam streaming", "Steam"),
-        ("virtual cable", "Virtual cable"),
-        ("loopit7 cable", "LoopIt7 Cable")
+        ("cable input", "VB-Audio Cable", "VB-Audio"),
+        ("cable output", "VB-Audio Cable", "VB-Audio"),
+        ("vb-audio", "VB-Audio Cable", "VB-Audio"),
+        ("voicemeeter", "VoiceMeeter", "VB-Audio"),
+        ("virtual audio cable", "Virtual Audio Cable", "VAC"),
+        ("elgato virtual audio", "Elgato", "Elgato"),
+        ("nvidia virtual audio", "NVIDIA Broadcast", "NVIDIA"),
+        ("steam streaming", "Steam", "Valve"),
+        ("virtual cable", "Virtual cable", ""),
+        ("loopit7 cable", "LoopIt7 Cable", "")
     ];
 
     /// <summary>
@@ -57,13 +57,22 @@ public static class VirtualCableService
     public static bool IsVirtual(AudioDeviceInfo device) => FamilyOf(device) is not null;
 
     /// <summary>The product a cable belongs to, or null when the endpoint is real hardware.</summary>
-    public static string? FamilyOf(AudioDeviceInfo device)
+    public static string? FamilyOf(AudioDeviceInfo device) => Match(device)?.Family;
+
+    /// <summary>
+    /// Who made the driver behind this cable, short enough to sit in a device name. Renaming
+    /// somebody's cable after a LoopIt7 box would otherwise leave nothing on the machine
+    /// saying whose driver is doing the work, and it is not ours.
+    /// </summary>
+    public static string VendorOf(AudioDeviceInfo device) => Match(device)?.Vendor ?? string.Empty;
+
+    private static (string Family, string Vendor)? Match(AudioDeviceInfo device)
     {
         string haystack = $"{device.Name} {device.InterfaceName}".ToLowerInvariant();
 
-        foreach (var (fragment, family) in KnownCables)
+        foreach (var (fragment, family, vendor) in KnownCables)
         {
-            if (haystack.Contains(fragment, StringComparison.Ordinal)) return family;
+            if (haystack.Contains(fragment, StringComparison.Ordinal)) return (family, vendor);
         }
 
         return null;

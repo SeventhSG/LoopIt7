@@ -11,6 +11,16 @@
 #define AppExeName     "LoopIt7.exe"
 #define RuntimeUrl     "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe"
 
+; VB-Audio's cable, bundled only when their redistributable has been placed in
+; installer\cable\. Shipping it needs a distribution agreement from VB-Audio, so the setup
+; is written to build and work identically without it: no file, no task, and the app falls
+; back to sending the user to vb-audio.com itself.
+#define CableSetup     "cable\VBCABLE_Setup_x64.exe"
+#define CableFamily    "VB-Audio Cable"
+#if FileExists(AddBackslash(SourcePath) + CableSetup)
+  #define BundleCable
+#endif
+
 [Setup]
 AppId={{7C6C6E2A-5B4D-4F1E-9C21-0A7F5B0E4D71}
 AppName={#AppName}
@@ -56,16 +66,30 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+#ifdef BundleCable
+; Offered only when this machine has no cable at all. Somebody who already runs VoiceMeeter
+; or a VB-Audio cable does not need a second one, and installing one anyway would leave them
+; with a driver they never asked for.
+Name: "cable"; Description: "Install a virtual audio cable, so other programs can send audio to LoopIt7";     GroupDescription: "Virtual audio cable:"; Check: not CableInstalled
+#endif
 
 [Files]
 Source: "..\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\README.txt"; DestDir: "{app}"; Flags: ignoreversion
+#ifdef BundleCable
+Source: "{#CableSetup}"; DestDir: "{tmp}"; Flags: deleteafterinstall; Tasks: cable
+#endif
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
+#ifdef BundleCable
+; VB-Audio's installer asks for administrator rights itself, which is why this goes through
+; the shell rather than being run directly: LoopIt7's own setup stays unelevated.
+Filename: "{tmp}\VBCABLE_Setup_x64.exe"; Parameters: "-i -h";     StatusMsg: "Installing the virtual audio cable...";     Flags: shellexec waituntilterminated; Tasks: cable
+#endif
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -89,12 +113,51 @@ const
     version back out is what turns "install" into "upgrade" in the wizard. }
   UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{7C6C6E2A-5B4D-4F1E-9C21-0A7F5B0E4D71}_is1';
 
+  { Where Windows keeps the endpoint list. A cable is only a cable once there is an endpoint
+    for it, so this is the same place the app looks rather than a guess at file paths. }
+  RenderEndpoints = 'SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render';
+
+  { PKEY_DeviceInterface_FriendlyName: the driver behind an endpoint, "VB-Audio Virtual
+    Cable" and the like. }
+  InterfaceNameValue = '{b3f8fa53-0004-438e-9003-51a46e139bfc},6';
+
 var
   DownloadPage: TDownloadWizardPage;
   InstalledVersion: String;
 
 { The version already on this machine, per user or for all users, or empty when LoopIt7 has
   never been installed here. }
+{ Whether this machine already has a virtual audio cable of any make on it. Somebody who
+  already runs VoiceMeeter or a VB-Audio cable does not need a second one, and installing one
+  anyway would leave them with a driver they never asked for. }
+function CableInstalled(): Boolean;
+var
+  Endpoints: TArrayOfString;
+  I: Integer;
+  Iface: String;
+begin
+  Result := False;
+
+  if not RegGetSubkeyNames(HKLM64, RenderEndpoints, Endpoints) then Exit;
+
+  for I := 0 to GetArrayLength(Endpoints) - 1 do
+  begin
+    if RegQueryStringValue(HKLM64, RenderEndpoints + '\' + Endpoints[I] + '\Properties',
+        InterfaceNameValue, Iface) then
+    begin
+      Iface := Lowercase(Iface);
+
+      if (Pos('vb-audio', Iface) > 0) or (Pos('voicemeeter', Iface) > 0)
+        or (Pos('virtual audio cable', Iface) > 0) or (Pos('elgato virtual audio', Iface) > 0)
+        or (Pos('nvidia virtual audio', Iface) > 0) or (Pos('virtual cable', Iface) > 0) then
+      begin
+        Result := True;
+        Exit;
+      end;
+    end;
+  end;
+end;
+
 function PreviousVersion(): String;
 begin
   Result := '';
@@ -237,6 +300,28 @@ begin
   end;
 end;
 
+{ Tell the app that the cable on this machine is one setup installed. By the time the app
+  runs, a cable installed thirty seconds ago and one the user has had for years look exactly
+  alike, and only the first is ours to rename. }
+procedure CurStepChanged(CurStep: TSetupStep);
+#ifdef BundleCable
+var
+  MarkerDir: String;
+#endif
+begin
+  if CurStep <> ssPostInstall then Exit;
+
+#ifdef BundleCable
+  if not WizardIsTaskSelected('cable') then Exit;
+
+  MarkerDir := ExpandConstant('{autoappdata}\LoopIt7');
+  if not DirExists(MarkerDir) then
+    ForceDirectories(MarkerDir);
+
+  SaveStringToFile(MarkerDir + '\installed-cable.txt', '{#CableFamily}', False);
+#endif
+end;
+
 { Settings and presets live outside the install directory. Removing them is the user's call. }
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
@@ -247,6 +332,11 @@ begin
   { A silent uninstall must never stop on a question. Leaving the settings behind is the
     safe answer: a reinstall then picks the patchbay back up where it was. }
   if UninstallSilent then Exit;
+
+  { The cable itself stays. It is a driver the user agreed to install and may well be using
+    for something else by now; silently pulling it out from under them would be worse than
+    leaving it. The note saying it was ours goes, so a later reinstall treats it as theirs. }
+  DeleteFile(ExpandConstant('{autoappdata}\LoopIt7\installed-cable.txt'));
 
   DataDir := ExpandConstant('{userappdata}\LoopIt7');
   if not DirExists(DataDir) then Exit;

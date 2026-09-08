@@ -1,4 +1,5 @@
 using LoopIt7.Models;
+using System.IO;
 
 namespace LoopIt7.Audio;
 
@@ -73,29 +74,84 @@ public static class CableOwnership
         // not about the ways we can open them.
         var present = devices
             .Where(VirtualCableService.IsVirtual)
-            .Select(d => d.Id)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .GroupBy(d => d.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
             .ToList();
+
+        string? installed = InstalledCableFamily();
+
+        bool Ours(AudioDeviceInfo device) =>
+            installed is not null &&
+            string.Equals(VirtualCableService.FamilyOf(device), installed, StringComparison.OrdinalIgnoreCase);
 
         if (!settings.CableBaselineTaken)
         {
-            settings.ForeignCableIds = present;
+            // A cable the LoopIt7 installer put here is ours from the first moment we look.
+            // Without this it would be indistinguishable from one the user had all along, and
+            // we would refuse to rename the very cable we installed for them.
+            settings.OwnCableIds = present.Where(Ours).Select(d => d.Id).ToList();
+            settings.ForeignCableIds = present.Where(d => !Ours(d)).Select(d => d.Id).ToList();
             settings.CableBaselineTaken = true;
             return true;
         }
 
-        if (!settings.AwaitingCable) return false;
-
         var arrived = present
-            .Where(id => !settings.ForeignCableIds.Contains(id, StringComparer.OrdinalIgnoreCase))
-            .Where(id => !settings.OwnCableIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+            .Where(d => !settings.ForeignCableIds.Contains(d.Id, StringComparer.OrdinalIgnoreCase))
+            .Where(d => !settings.OwnCableIds.Contains(d.Id, StringComparer.OrdinalIgnoreCase))
             .ToList();
 
         if (arrived.Count == 0) return false;
 
-        settings.OwnCableIds.AddRange(arrived);
-        settings.AwaitingCable = false;
+        // Two ways a new cable becomes ours: our own installer put it there, or the user went
+        // and fetched one because LoopIt7 asked them to. Anything else that turns up is
+        // somebody else's business, whatever it is.
+        var claimable = arrived.Where(d => Ours(d) || settings.AwaitingCable).ToList();
+
+        if (claimable.Count == 0) return false;
+
+        settings.OwnCableIds.AddRange(claimable.Select(d => d.Id));
+        if (settings.AwaitingCable) settings.AwaitingCable = false;
+
         return true;
+    }
+
+    /// <summary>
+    /// The cable family the LoopIt7 installer put on this machine, or null when it installed
+    /// none because one was already here.
+    /// <para>
+    /// Setup writes this, because setup is the only thing that knows. By the time the app
+    /// runs, a cable it installed thirty seconds ago and a cable the user has had for two
+    /// years look exactly alike.
+    /// </para>
+    /// </summary>
+    public static string? InstalledCableFamily()
+    {
+        // Setup installs per user by default and only asks for administrator rights when
+        // somebody chooses an all users install, so the note lands in whichever of the two
+        // it could actually write to.
+        foreach (var folder in new[]
+                 {
+                     Environment.SpecialFolder.ApplicationData,
+                     Environment.SpecialFolder.CommonApplicationData
+                 })
+        {
+            try
+            {
+                string path = Path.Combine(
+                    Environment.GetFolderPath(folder), "LoopIt7", "installed-cable.txt");
+
+                if (!File.Exists(path)) continue;
+
+                string family = File.ReadAllText(path).Trim();
+                if (family.Length > 0) return family;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Unreadable is the same as absent: we simply do not claim anything.
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

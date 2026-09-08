@@ -11,6 +11,10 @@ installer/wizard-small.bmp
 # Microsoft's driver sample, fetched on demand by driver\scripts\fetch-sample.ps1
 driver/vendor/
 
+# VB-Audio's cable redistributable. Shipping it needs a distribution agreement with them,
+# so it is dropped in by hand on a machine that has one and never committed here.
+installer/cable/
+
 # Local tooling
 .vs/
 *.user

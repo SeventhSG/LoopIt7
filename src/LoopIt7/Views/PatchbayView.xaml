@@ -154,9 +154,49 @@
                                         <DropShadowEffect BlurRadius="24" ShadowDepth="6" Direction="270" Color="#000000" Opacity="0.55" />
                                     </Border.Effect>
                                     <StackPanel>
-                                        <TextBlock Style="{StaticResource Caption}" Margin="10,6,10,6"
+                                        <TextBlock Margin="10,6,10,6"
                                                    TextWrapping="Wrap"
-                                                   Text="Pick a cable. Other programs choose it as their output, and what they play arrives here." />
+                                                   Text="Pick a cable. Other programs choose it as their output, and what they play arrives here.">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Inlets.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+
+                                        <!--
+                                            What a machine with no cable on it shows. Without this the
+                                            picker is simply empty, which tells somebody who has never
+                                            heard of a virtual cable exactly nothing.
+                                        -->
+                                        <StackPanel Margin="10,6,10,2">
+                                            <StackPanel.Style>
+                                                <Style TargetType="StackPanel">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Inlets.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Style>
+
+                                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
+                                                       Text="This machine has no audio cable on it, so there is nothing for other programs to send to yet." />
+                                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
+                                                       Margin="0,6,0,0" FontSize="11"
+                                                       Text="A cable is a free driver that carries audio between programs. Install one and LoopIt7 will name it after this box, so it shows up as your own device everywhere." />
+                                            <Button Style="{StaticResource MenuRowButton}" Margin="0,8,0,0"
+                                                    Click="OnGetCableClick"
+                                                    AutomationProperties.Name="Get a cable">
+                                                <TextBlock Text="Get the free cable" Foreground="{StaticResource AccentBrush}" />
+                                            </Button>
+                                        </StackPanel>
+
                                         <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto"
                                                       HorizontalScrollBarVisibility="Disabled">
                                             <ItemsControl x:Name="InletList" ItemsSource="{Binding Inlets}">
@@ -175,9 +215,19 @@
                                                 </ItemsControl.ItemTemplate>
                                             </ItemsControl>
                                         </ScrollViewer>
-                                        <TextBlock Style="{StaticResource Caption}" Margin="10,8,10,4"
+                                        <TextBlock Margin="10,8,10,4"
                                                    TextWrapping="Wrap" FontSize="11"
-                                                   Text="Cables already on this machine keep their own names. LoopIt7 only renames one it installed itself." />
+                                                   Text="Cables already on this machine keep their own names. LoopIt7 only renames one it installed itself.">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Inlets.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                     </StackPanel>
                                 </Border>
                             </Popup>

@@ -43,7 +43,7 @@ src/LoopIt7/
   ViewModels/       MainViewModel is the mixer; PatchNodeViewModel is one box
   Views/            PatchbayView is the canvas, plus Devices and MIDI
   Themes/           Tokens.xaml holds the palette and the shape rules
-tests/LoopIt7.Tests  The feedback guard and the cable end pairing. No window, no devices
+tests/LoopIt7.Tests  Feedback guard, cable end pairing, who may rename what. Headless
 driver/             Scaffolding towards a LoopIt7 Cable, and what it would take
 build/              make-assets.ps1 draws every raster; build.ps1 does the whole pipeline
 ```
@@ -83,6 +83,14 @@ read the signer, not the status.
 Until that is solved, LoopIt7 does everything that needs no driver, and for the one thing
 that does, it uses whatever cable is already installed and names both of its ends for the
 user.
+
+A virtual output can be given a way in from Windows by binding it to a cable: the other
+program sends to the cable's playback end, LoopIt7 listens on its recording end. Which
+cables LoopIt7 may rename is decided in `CableOwnership`, and the rule is narrow on
+purpose. A cable that was on the machine before LoopIt7 ever asked for one is never
+renamed, because other people's OBS scenes and Discord settings point at that name. Only a
+cable that arrived *after* the user followed LoopIt7's own prompt to get one is ours to
+name, and the uninstaller runs `LoopIt7.exe --release-cables` to put every name back.
 
 ## Style
 

@@ -123,16 +123,23 @@ without asking you to install anything:
 - Any output as a destination, driver free.
 - Virtual outputs of your own, driver free.
 
-That last one is worth being precise about, because the name invites the wrong idea. A LoopIt7
-virtual output is a **box inside LoopIt7**. It does not appear in the Windows sound settings,
-OBS will not list it, and no program can select it as its output device. What it does instead
-is take programs in on the LoopIt7 side: you assign them, LoopIt7 captures each one, mutes it
-where Windows was sending it, and plays the sum wherever you have pointed the box. From where
-you sit that is the same result; it is simply arrived at from the other end.
+That last one is worth being precise about, because the name invites the wrong idea. On its
+own, a LoopIt7 virtual output is a **box inside LoopIt7**. It does not appear in the Windows
+sound settings and no program can select it, because a device on Windows comes from a kernel
+driver and nothing in user space can add one. What the box does instead is take programs in on
+the LoopIt7 side: you assign them, LoopIt7 captures each one, mutes it where Windows was
+sending it, and plays the sum wherever you have pointed the box.
 
-The one thing a cable is genuinely needed for is handing a **mix** back to another program as
-if it were a microphone. For that, LoopIt7 uses whatever cable is already on your machine, and
-points you at [VB-Audio's free one](https://vb-audio.com/Cable/) if there is none.
+**Giving a box a way in.** If you want other programs to choose the box themselves, press the
+link button on it and pick a cable. A cable is a free driver with two ends: the other program
+sends to one end, LoopIt7 listens on the other, and what arrives lands in your box and leaves
+down its cables as usual. The picker lists the ends as pairs, so nothing is guessed, and if
+there is no cable on the machine it says so and offers to fetch one.
+
+A cable LoopIt7 asked you to install gets named after the box, so the name in Discord's list
+is the name on your canvas. A cable that was already here keeps the name it came with: it is
+written down in somebody's OBS scene and their Discord settings, and LoopIt7 has no business
+renaming it. Uninstalling puts back every name it changed.
 
 A cable has two ends and Windows never says which belongs to which, which is the quietest way
 a routing setup fails. LoopIt7 pairs them for you and says so in plain words: send audio to

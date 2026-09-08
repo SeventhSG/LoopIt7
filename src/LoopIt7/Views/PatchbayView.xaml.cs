@@ -232,6 +232,16 @@ public partial class PatchbayView : UserControl
     }
 
     /// <summary>
+    /// Sends somebody with no cable off to get one. LoopIt7 remembers that it asked, which is
+    /// what lets it name the cable that comes back.
+    /// </summary>
+    private void OnGetCableClick(object sender, RoutedEventArgs e)
+    {
+        _viewModel?.RequestCable();
+        if (sender is FrameworkElement element) ClosePopupAround(element);
+    }
+
+    /// <summary>
     /// Shuts the popup the clicked row lives in. A popup keeps its own visual tree, so the
     /// way back out is the logical one.
     /// </summary>

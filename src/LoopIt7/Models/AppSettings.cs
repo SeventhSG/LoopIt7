@@ -104,6 +104,33 @@ public sealed class AppSettings
     /// <summary>Cables LoopIt7 installed, renamed, and must put back if it is removed.</summary>
     public List<CableClaimSettings> ClaimedCables { get; set; } = [];
 
+    /// <summary>
+    /// Whether the baseline below has been taken. Distinguishes "no cables were here" from
+    /// "we have not looked yet", which are opposite answers to the question of what we may
+    /// rename.
+    /// </summary>
+    public bool CableBaselineTaken { get; set; }
+
+    /// <summary>
+    /// Every cable endpoint that was on this machine before LoopIt7 ever asked for one. These
+    /// belong to somebody else's setup and are never renamed, whatever else happens.
+    /// </summary>
+    public List<string> ForeignCableIds { get; set; } = [];
+
+    /// <summary>
+    /// Cable endpoints that appeared after the user asked LoopIt7 for a cable. Nothing else
+    /// on the machine points at these by name yet, so LoopIt7 may name them after the box
+    /// they serve.
+    /// </summary>
+    public List<string> OwnCableIds { get; set; } = [];
+
+    /// <summary>
+    /// Set while the user has been sent to get a cable and has not come back with one. It is
+    /// the causal link that makes a new cable ours rather than a coincidence: without it, a
+    /// VoiceMeeter installed next month would look like something LoopIt7 put there.
+    /// </summary>
+    public bool AwaitingCable { get; set; }
+
     public bool StartWithWindows { get; set; }
     public bool StartMinimized { get; set; }
     public bool AutoStartRouting { get; set; }

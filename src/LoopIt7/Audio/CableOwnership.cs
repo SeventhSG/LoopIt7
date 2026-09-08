@@ -29,6 +29,55 @@ public static class CableOwnership
     /// <summary>The bracketed half every cable LoopIt7 owns carries.</summary>
     public const string OwnedInterfaceName = "LoopIt7";
 
+    /// <summary>
+    /// Notes which cables were already here, once, on the first run that ever looks. Everything
+    /// present at that moment belongs to somebody else's setup and is off limits for renaming
+    /// for the rest of the install.
+    /// <para>
+    /// After that, a cable becomes LoopIt7's only if it turns up while the user is away getting
+    /// one at LoopIt7's asking. That causal link is the whole test: without it, a VoiceMeeter
+    /// installed next month would be indistinguishable from a cable we put there, and we would
+    /// rename somebody's devices out from under them.
+    /// </para>
+    /// </summary>
+    /// <returns>True when something was recorded, so the caller knows to save.</returns>
+    public static bool ObserveCables(AppSettings settings, IEnumerable<AudioDeviceInfo> devices)
+    {
+        var present = devices
+            .Where(VirtualCableService.IsVirtual)
+            .Select(d => d.Id)
+            .ToList();
+
+        if (!settings.CableBaselineTaken)
+        {
+            settings.ForeignCableIds = present;
+            settings.CableBaselineTaken = true;
+            return true;
+        }
+
+        if (!settings.AwaitingCable) return false;
+
+        var arrived = present
+            .Where(id => !settings.ForeignCableIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+            .Where(id => !settings.OwnCableIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        if (arrived.Count == 0) return false;
+
+        settings.OwnCableIds.AddRange(arrived);
+        settings.AwaitingCable = false;
+        return true;
+    }
+
+    /// <summary>
+    /// Whether LoopIt7 is allowed to rename this endpoint. True only for a cable that arrived
+    /// because LoopIt7 asked for one. Everything else, including every cable that was here
+    /// first, keeps the name it came with.
+    /// </summary>
+    public static bool MayClaim(AppSettings settings, AudioDeviceInfo device) =>
+        VirtualCableService.IsVirtual(device) &&
+        settings.OwnCableIds.Contains(device.Id, StringComparer.OrdinalIgnoreCase);
+
     /// <summary>True when this endpoint is one LoopIt7 installed and renamed.</summary>
     public static bool IsOwned(AppSettings settings, AudioDeviceInfo device) =>
         FindClaim(settings, device) is not null;
@@ -64,6 +113,12 @@ public static class CableOwnership
         if (!VirtualCableService.IsVirtual(render) || !VirtualCableService.IsVirtual(capture))
         {
             error = "That is a real device, not a cable. LoopIt7 only renames cables it installed.";
+            return false;
+        }
+
+        if (!MayClaim(settings, render) || !MayClaim(settings, capture))
+        {
+            error = "That cable was already on this machine. LoopIt7 leaves those named the way their owner set them.";
             return false;
         }
 

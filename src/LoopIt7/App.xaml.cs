@@ -40,6 +40,13 @@ public partial class App : Application
             return;
         }
 
+        if (e.Args.Any(a => string.Equals(a, "--release-cables", StringComparison.OrdinalIgnoreCase)))
+        {
+            ReleaseCables();
+            Shutdown();
+            return;
+        }
+
         base.OnStartup(e);
 
         HonourSystemMotionSetting();
@@ -96,6 +103,37 @@ public partial class App : Application
 
         _reportingError = false;
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// Hands back every cable LoopIt7 renamed, restoring the names Windows had for them. The
+    /// uninstaller runs this before it deletes anything.
+    /// <para>
+    /// Leaving a device called "LoopIt7 Cable" on a machine that no longer has LoopIt7 on it
+    /// is the kind of litter nobody can trace afterwards: the name is in Discord's list, in
+    /// OBS, in the Sound control panel, and there is nothing left to explain where it came
+    /// from. It opens no device and makes no sound.
+    /// </para>
+    /// </summary>
+    private static void ReleaseCables()
+    {
+        try
+        {
+            var settingsService = new Services.SettingsService();
+            var settings = settingsService.Load();
+            if (settings.ClaimedCables.Count == 0) return;
+
+            using var devices = new Audio.DeviceService();
+            var endpoints = devices.GetOutputs().Concat(devices.GetInputSources()).ToList();
+
+            Audio.CableOwnership.ReleaseAll(settings, endpoints);
+            settingsService.Save(settings);
+        }
+        catch
+        {
+            // An uninstall must not stop because a device was already gone. The worst case is
+            // a renamed endpoint left behind, and Windows lets anyone rename it back.
+        }
     }
 
     /// <summary>

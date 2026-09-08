@@ -1,7 +1,9 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using LoopIt7.Audio;
 using LoopIt7.ViewModels;
 
 namespace LoopIt7.Views;
@@ -23,7 +25,11 @@ public partial class PatchbayView : UserControl
     private PatchNodeViewModel? _draggingNode;
     private Point _dragGrabOffset;
 
-    private SourceNodeViewModel? _cableOrigin;
+    /// <summary>
+    /// The box a cable is being pulled from. Typed as the base box because a virtual output
+    /// can be either end of a cable.
+    /// </summary>
+    private PatchNodeViewModel? _cableOrigin;
     private readonly PathFigure _dragFigure = new();
     private readonly BezierSegment _dragCurve = new() { IsStroked = true };
 
@@ -57,7 +63,8 @@ public partial class PatchbayView : UserControl
 
     private void OnPortMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not FrameworkElement { DataContext: SourceNodeViewModel source }) return;
+        if (sender is not FrameworkElement { DataContext: PatchNodeViewModel source }) return;
+        if (!source.CanSend) return;
 
         _cableOrigin = source;
         UpdateDragWire(e.GetPosition(Surface));
@@ -95,7 +102,7 @@ public partial class PatchbayView : UserControl
     {
         if (_cableOrigin is not null)
         {
-            var target = FindDestinationUnder(e.GetPosition(Surface));
+            var target = FindReceiverUnder(e.GetPosition(Surface), _cableOrigin);
             if (target is not null && _viewModel is not null)
             {
                 if (!_viewModel.TryConnect(_cableOrigin, target))
@@ -167,29 +174,69 @@ public partial class PatchbayView : UserControl
     }
 
     /// <summary>
-    /// Finds the destination box under the cursor. Hit testing the visual tree would land on
-    /// whichever child happens to be on top, so this walks the boxes by their own geometry.
+    /// Finds the box under the cursor that a cable can end at. Hit testing the visual tree
+    /// would land on whichever child happens to be on top, so this walks the boxes by their
+    /// own geometry. Virtual outputs come first: they sit between the lanes and are the more
+    /// likely target when two boxes overlap.
     /// </summary>
-    private DestinationNodeViewModel? FindDestinationUnder(Point position)
+    private PatchNodeViewModel? FindReceiverUnder(Point position, PatchNodeViewModel origin)
     {
         if (_viewModel is null) return null;
 
-        foreach (var destination in _viewModel.Destinations)
+        foreach (var node in _viewModel.VirtualOutputs.Cast<PatchNodeViewModel>().Concat(_viewModel.Destinations))
         {
+            if (!node.CanReceive || ReferenceEquals(node, origin)) continue;
+
             // A generous margin on the left, so aiming at the port is enough.
             var bounds = new Rect(
-                destination.X - 16,
-                destination.Y,
+                node.X - 16,
+                node.Y,
                 PatchNodeViewModel.NodeWidth + 16,
                 PatchNodeViewModel.NodeHeight);
 
-            if (bounds.Contains(position)) return destination;
+            if (bounds.Contains(position)) return node;
         }
 
         return null;
     }
 
-    private void ShowAlreadyPatched(SourceNodeViewModel source, DestinationNodeViewModel destination)
+    // Assigning a program to a virtual output
+
+    /// <summary>Which programs are playing changes minute to minute, so the list is rebuilt on open.</summary>
+    private void OnAssignOpened(object sender, RoutedEventArgs e) =>
+        _viewModel?.RefreshApplicationsCommand.Execute(null);
+
+    private void OnAssignApplicationClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement element) return;
+        if (element.DataContext is not AudioApplication application) return;
+        if (element.Tag is not VirtualOutputNodeViewModel target) return;
+
+        _viewModel?.AssignApplication(target, application);
+        ClosePopupAround(element);
+    }
+
+    /// <summary>
+    /// Shuts the popup the clicked row lives in. A popup keeps its own visual tree, so the
+    /// way back out is the logical one.
+    /// </summary>
+    private static void ClosePopupAround(DependencyObject element)
+    {
+        DependencyObject? node = element;
+
+        while (node is not null)
+        {
+            if (node is Popup popup)
+            {
+                popup.IsOpen = false;
+                return;
+            }
+
+            node = LogicalTreeHelper.GetParent(node) ?? VisualTreeHelper.GetParent(node);
+        }
+    }
+
+    private void ShowAlreadyPatched(PatchNodeViewModel source, PatchNodeViewModel destination)
     {
         var existing = _viewModel?.Cables.FirstOrDefault(c => c.Source == source && c.Destination == destination);
         if (existing is not null && _viewModel is not null) _viewModel.SelectedCable = existing;

@@ -48,6 +48,7 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
                             <TextBlock Grid.Column="0" Style="{StaticResource Glyph}" FontSize="13"
@@ -59,13 +60,73 @@
                                        VerticalAlignment="Center"
                                        ToolTip="{Binding PickupHint}" />
 
-                            <Button Grid.Column="2" Style="{StaticResource IconButtonDanger}"
+                            <!-- Send a program into this virtual output -->
+                            <ToggleButton x:Name="AssignToggle" Grid.Column="2"
+                                          Style="{StaticResource NodeHeaderToggle}" Tag="&#xE710;"
+                                          Margin="0,0,4,0"
+                                          Checked="OnAssignOpened"
+                                          Visibility="{Binding CanAssignApps, Converter={StaticResource BoolToVisibility}}"
+                                          ToolTip="Send a program's audio into this virtual output"
+                                          AutomationProperties.Name="Assign a program" />
+
+                            <!-- Take a program off its own output -->
+                            <ToggleButton Grid.Column="2"
+                                          Style="{StaticResource NodeHeaderToggle}" Tag="&#xE8AB;"
+                                          Margin="0,0,4,0"
+                                          IsChecked="{Binding Exclusive}"
+                                          Visibility="{Binding SupportsExclusive, Converter={StaticResource BoolToVisibility}}"
+                                          ToolTip="Take this program off its own output, so you only hear it where LoopIt7 sends it"
+                                          AutomationProperties.Name="Only through LoopIt7" />
+
+                            <Button Grid.Column="3" Style="{StaticResource IconButtonDanger}"
                                     Width="20" Height="20"
                                     Command="{Binding RemoveCommand}"
                                     ToolTip="Remove this box" AutomationProperties.Name="Remove this box">
                                 <TextBlock Style="{StaticResource Glyph}" FontSize="9" Text="&#xE711;"
                                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                             </Button>
+
+                            <!--
+                                The picker for that first toggle. It lives inside the card so it
+                                can reach the box it belongs to without the canvas having to
+                                track which one was clicked.
+                            -->
+                            <Popup Grid.Column="2" Placement="Bottom" PlacementTarget="{Binding ElementName=AssignToggle}"
+                                   HorizontalOffset="-236" VerticalOffset="8"
+                                   IsOpen="{Binding IsChecked, ElementName=AssignToggle, Mode=TwoWay}"
+                                   StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
+                                <Border Background="{StaticResource SurfaceHiBrush}"
+                                        BorderBrush="{StaticResource LineStrongBrush}"
+                                        BorderThickness="1" CornerRadius="{StaticResource SurfaceRadius}"
+                                        Width="300" Padding="8" Margin="12">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="24" ShadowDepth="6" Direction="270" Color="#000000" Opacity="0.55" />
+                                    </Border.Effect>
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource Caption}" Margin="10,6,10,6"
+                                                   TextWrapping="Wrap"
+                                                   Text="Pick a program. It gets captured, patched in here, and taken off its own output so you hear it once." />
+                                        <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Disabled">
+                                            <ItemsControl x:Name="AssignList" ItemsSource="{Binding Applications}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button Style="{StaticResource MenuRowButton}"
+                                                                Click="OnAssignApplicationClick"
+                                                                Tag="{Binding DataContext, ElementName=AssignList}">
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
+                                                                <TextBlock Style="{StaticResource Caption}" FontSize="11"
+                                                                           Margin="0,2,0,0" Text="{Binding Subtitle}" />
+                                                            </StackPanel>
+                                                        </Button>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                    </StackPanel>
+                                </Border>
+                            </Popup>
                         </Grid>
 
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,3,0,0">
@@ -73,6 +134,9 @@
                                        MaxWidth="120" />
                             <TextBlock Style="{StaticResource Caption}" FontSize="11" Text="{Binding FormatText}"
                                        Margin="8,0,0,0" />
+                            <TextBlock Style="{StaticResource Caption}" FontSize="11"
+                                       Margin="8,0,0,0" Text="{Binding RouteText}"
+                                       Foreground="{StaticResource AccentBrush}" />
                             <TextBlock Text="{Binding StatusText}" Margin="8,0,0,0">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
@@ -157,7 +221,7 @@
                          Fill="{StaticResource SurfaceHiBrush}"
                          Stroke="{StaticResource AccentBrush}" StrokeThickness="2"
                          Cursor="Cross"
-                         Visibility="{Binding IsSource, Converter={StaticResource BoolToVisibility}}"
+                         Visibility="{Binding CanSend, Converter={StaticResource BoolToVisibility}}"
                          MouseLeftButtonDown="OnPortMouseDown"
                          ToolTip="Drag from here to an output" />
 
@@ -167,7 +231,7 @@
                          Margin="-7,0,0,0"
                          Fill="{StaticResource SurfaceHiBrush}"
                          Stroke="{StaticResource AccentBrush}" StrokeThickness="2"
-                         Visibility="{Binding IsSource, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}"
+                         Visibility="{Binding CanReceive, Converter={StaticResource BoolToVisibility}}"
                          IsHitTestVisible="False" />
             </Grid>
 
@@ -270,6 +334,16 @@
                     </ItemsControl.ItemsPanel>
                 </ItemsControl>
 
+                <ItemsControl ItemsSource="{Binding VirtualOutputs}"
+                              ItemTemplate="{StaticResource NodeCard}"
+                              ItemContainerStyle="{StaticResource NodeContainer}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <Canvas />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+
                 <ItemsControl ItemsSource="{Binding Destinations}"
                               ItemTemplate="{StaticResource NodeCard}"
                               ItemContainerStyle="{StaticResource NodeContainer}">
@@ -359,7 +433,7 @@
                            HorizontalAlignment="Center" Margin="0,14,0,0" />
                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextAlignment="Center"
                            Margin="0,8,0,0"
-                           Text="Add a source and an output, then drag a cable between them. Or start from one of these and change whatever does not fit." />
+                           Text="Add a source and an output, then drag a cable between them. Or make a virtual output, assign a program to it, and fan it out to as many outputs as you like." />
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
                     <Button Style="{StaticResource GhostButton}" Height="36" Padding="16,0"

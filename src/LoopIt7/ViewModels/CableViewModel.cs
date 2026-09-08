@@ -18,7 +18,7 @@ public sealed class CableViewModel : ObservableObject, IDisposable
     private double _peak;
     private bool _isSelected;
 
-    public CableViewModel(string id, SourceNodeViewModel source, DestinationNodeViewModel destination)
+    public CableViewModel(string id, PatchNodeViewModel source, PatchNodeViewModel destination)
     {
         Id = id;
         Source = source;
@@ -42,8 +42,14 @@ public sealed class CableViewModel : ObservableObject, IDisposable
     }
 
     public string Id { get; }
-    public SourceNodeViewModel Source { get; }
-    public DestinationNodeViewModel Destination { get; }
+
+    /// <summary>
+    /// Typed as the base box rather than as a source and a destination, because a virtual
+    /// output is both and can sit at either end of a cable.
+    /// </summary>
+    public PatchNodeViewModel Source { get; }
+
+    public PatchNodeViewModel Destination { get; }
 
     public PathGeometry Geometry { get; }
 

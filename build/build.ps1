@@ -48,6 +48,12 @@ Get-ChildItem $publishDir -Filter '*.pdb' | Remove-Item -Force -ErrorAction Sile
 $size = (Get-ChildItem $publishDir -Recurse | Measure-Object -Property Length -Sum).Sum
 Write-Host ("   published {0:N1} MB to {1}" -f ($size / 1MB), $publishDir)
 
+# Sign the app before it goes into the installer, so the file the user ends up running
+# carries the signature too. Quietly does nothing when no certificate is configured.
+Write-Host '== signing ==' -ForegroundColor DarkYellow
+& powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'sign.ps1') `
+    -Path (Join-Path $publishDir 'LoopIt7.exe')
+
 if ($SkipInstaller) { return }
 
 Write-Host '== installer ==' -ForegroundColor DarkYellow
@@ -63,6 +69,10 @@ New-Item -ItemType Directory -Force $distDir | Out-Null
 & $iscc /Qp (Join-Path $root 'installer\LoopIt7.iss')
 if ($LASTEXITCODE -ne 0) { throw 'The installer failed to compile.' }
 
-Get-ChildItem $distDir -Filter '*.exe' | ForEach-Object {
+$setup = Get-ChildItem $distDir -Filter '*.exe'
+& powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'sign.ps1') `
+    -Path ($setup | ForEach-Object { $_.FullName })
+
+$setup | ForEach-Object {
     Write-Host ("   {0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB)) -ForegroundColor Green
 }

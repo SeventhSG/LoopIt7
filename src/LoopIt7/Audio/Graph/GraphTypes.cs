@@ -10,7 +10,14 @@ public enum SourceKind
     DeviceLoopback,
 
     /// <summary>One application and its children, captured on their own.</summary>
-    Application
+    Application,
+
+    /// <summary>
+    /// A virtual output: cables arrive at it, it sums them, and the sum leaves again. It
+    /// produces audio like any other source, but the audio comes from the patchbay itself
+    /// rather than from anything Windows owns.
+    /// </summary>
+    Bus
 }
 
 public enum NodeStatus

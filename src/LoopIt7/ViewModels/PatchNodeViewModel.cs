@@ -45,7 +45,36 @@ public abstract class PatchNodeViewModel : ObservableObject
     /// <summary>Segoe Fluent glyph identifying what kind of thing this node is.</summary>
     public abstract string Glyph { get; }
 
+    /// <summary>True when the engine drives this box as a source of audio.</summary>
     public abstract bool IsSource { get; }
+
+    /// <summary>True when cables can start here, which puts a port on the right hand edge.</summary>
+    public virtual bool CanSend => IsSource;
+
+    /// <summary>True when cables can end here, which puts a port on the left hand edge.</summary>
+    public virtual bool CanReceive => !IsSource;
+
+    /// <summary>True for a virtual output, which is the only box that can adopt a program.</summary>
+    public virtual bool CanAssignApps => false;
+
+    /// <summary>
+    /// True for a running program, the only thing that can be taken off its own output.
+    /// <para>
+    /// Declared here rather than only on the source, because the card template is shared by
+    /// every box and a binding that cannot be resolved leaves the control visible.
+    /// </para>
+    /// </summary>
+    public virtual bool SupportsExclusive => false;
+
+    /// <summary>Bound by the card for the box above. Meaningless anywhere else.</summary>
+    public virtual bool Exclusive
+    {
+        get => false;
+        set { }
+    }
+
+    /// <summary>Extra line under the title. Only a program that has been taken over has one.</summary>
+    public virtual string RouteText => string.Empty;
 
     public RelayCommand RemoveCommand { get; }
     public RelayCommand ResetGainCommand { get; }
@@ -171,7 +200,7 @@ public abstract class PatchNodeViewModel : ObservableObject
     }
 
     /// <summary>Only sources can be soloed. An output is where you listen, not what you pick.</summary>
-    public bool SupportsSolo => IsSource;
+    public virtual bool SupportsSolo => IsSource;
 
     private bool _silencedBySolo;
 
@@ -274,12 +303,72 @@ public sealed class SourceNodeViewModel : PatchNodeViewModel
 
     public override bool IsSource => true;
 
+    /// <summary>Only a program can be taken off its own output. A microphone has none.</summary>
+    public override bool SupportsExclusive => Kind == SourceKind.Application;
+
+    private bool _exclusive;
+
+    /// <summary>
+    /// Mute this program in the Windows volume mixer while routing runs, so it is heard only
+    /// where LoopIt7 sends it instead of twice. Cleared again the moment routing stops, the
+    /// box is removed, or the app closes.
+    /// </summary>
+    public override bool Exclusive
+    {
+        get => _exclusive;
+        set
+        {
+            if (!SetProperty(ref _exclusive, value)) return;
+            OnPropertyChanged(nameof(RouteText));
+            ExclusiveChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public event EventHandler? ExclusiveChanged;
+
+    /// <summary>Reads out under the title, so the takeover is visible without hunting for it.</summary>
+    public override string RouteText => _exclusive ? "only through LoopIt7" : string.Empty;
+
     public override string Glyph => Kind switch
     {
         SourceKind.Device => "\uE720",           // microphone
         SourceKind.DeviceLoopback => "\uE767",   // a speaker, tapped on the way out
         _ => "\uECAA"                            // application
     };
+}
+
+/// <summary>
+/// A virtual output. It is a source and a destination at the same time: cables end at it,
+/// it sums them, and the sum leaves down cables of its own.
+/// <para>
+/// The engine treats it as a source, so it carries a source's fader and meter. What it does
+/// not carry is solo, because solo means "only this one of the things I picked", and nobody
+/// picks a bus.
+/// </para>
+/// </summary>
+public sealed class VirtualOutputNodeViewModel : PatchNodeViewModel
+{
+    public VirtualOutputNodeViewModel(string id, string title)
+        : base(id, title, "virtual output")
+    {
+    }
+
+    /// <summary>
+    /// The live list of programs Windows says are playing, shared with the rest of the app.
+    /// It hangs off the node because the picker that uses it lives inside the node's card,
+    /// inside a popup, where the main view model is out of reach.
+    /// </summary>
+    public System.Collections.ObjectModel.ObservableCollection<Audio.AudioApplication>? Applications { get; set; }
+
+    public override bool IsSource => true;
+
+    public override bool CanReceive => true;
+
+    public override bool CanAssignApps => true;
+
+    public override bool SupportsSolo => false;
+
+    public override string Glyph => "\uE8AB";   // two arrows: what arrives here leaves again
 }
 
 /// <summary>A playback endpoint: speakers, headphones, an interface, or a virtual cable.</summary>

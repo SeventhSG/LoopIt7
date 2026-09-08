@@ -525,6 +525,43 @@
         </Setter>
     </Style>
 
+    <!--
+        A 20 by 20 toggle for the top corner of a node card. Same vocabulary as the solo
+        button, sized to sit next to the remove button without pushing the title around.
+    -->
+    <Style x:Key="NodeHeaderToggle" TargetType="ToggleButton">
+        <Setter Property="Width" Value="20" />
+        <Setter Property="Height" Value="20" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Shell"
+                            Background="{StaticResource SunkenBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource ControlRadius}">
+                        <TextBlock Style="{StaticResource Glyph}" FontSize="9"
+                                   Text="{TemplateBinding Tag}"
+                                   Foreground="{TemplateBinding Foreground}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Shell" Property="BorderBrush" Value="{StaticResource LineStrongBrush}" />
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Shell" Property="Background" Value="{StaticResource AccentSoftBrush}" />
+                            <Setter TargetName="Shell" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- A row in a menu of devices or applications. -->
     <Style x:Key="MenuRowButton" TargetType="Button">
         <Setter Property="Cursor" Value="Hand" />

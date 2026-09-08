@@ -221,6 +221,33 @@ public partial class MainWindow : Window
         AddOutputPopup.IsOpen = !AddOutputPopup.IsOpen;
     }
 
+    private void OnAddVirtualOutputClick(object sender, RoutedEventArgs e)
+    {
+        AddSourcePopup.IsOpen = false;
+        AddOutputPopup.IsOpen = false;
+        AddVirtualOutputPopup.IsOpen = !AddVirtualOutputPopup.IsOpen;
+
+        if (AddVirtualOutputPopup.IsOpen) VirtualOutputNameBox.Focus();
+    }
+
+    private void OnVirtualOutputNameKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter) return;
+
+        CreateVirtualOutput();
+        e.Handled = true;
+    }
+
+    private void OnCreateVirtualOutputClick(object sender, RoutedEventArgs e) => CreateVirtualOutput();
+
+    private void CreateVirtualOutput()
+    {
+        if (!_viewModel.CreateVirtualOutputCommand.CanExecute(null)) return;
+
+        _viewModel.CreateVirtualOutputCommand.Execute(null);
+        AddVirtualOutputPopup.IsOpen = false;
+    }
+
     private void OnMenuRowClick(object sender, RoutedEventArgs e)
     {
         if (sender is not System.Windows.Controls.Button button) return;

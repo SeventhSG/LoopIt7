@@ -43,9 +43,13 @@ public static class CableOwnership
     /// <returns>True when something was recorded, so the caller knows to save.</returns>
     public static bool ObserveCables(AppSettings settings, IEnumerable<AudioDeviceInfo> devices)
     {
+        // A playback endpoint turns up twice, once as itself and once as the loopback source
+        // that taps it, and both carry the same endpoint id. Provenance is about endpoints,
+        // not about the ways we can open them.
         var present = devices
             .Where(VirtualCableService.IsVirtual)
             .Select(d => d.Id)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         if (!settings.CableBaselineTaken)

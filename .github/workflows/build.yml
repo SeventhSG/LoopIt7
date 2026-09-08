@@ -27,6 +27,12 @@ jobs:
       - name: Build
         run: dotnet build src/LoopIt7/LoopIt7.csproj -c Release --nologo
 
+      # The routing safety rules: the feedback guard, the cable end pairing, and which
+      # cables LoopIt7 is allowed to rename. They open no device and make no sound, and a
+      # release that fails them should not be built at all.
+      - name: Safety tests
+        run: dotnet run --project tests/LoopIt7.Tests -c Release --nologo
+
       - name: Publish
         run: dotnet publish src/LoopIt7/LoopIt7.csproj -c Release -r win-x64 --self-contained false -o publish --nologo
 

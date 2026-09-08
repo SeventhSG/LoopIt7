@@ -1,3 +1,6 @@
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Markup;
 using LoopIt7.Audio;
 using LoopIt7.Audio.Graph;
 using LoopIt7.Models;
@@ -169,6 +172,15 @@ bool Guard(
     CableOwnership.ObserveCables(settings, [theirs]);
 
     Check("the first look records what was already here", settings.CableBaselineTaken, "no baseline taken");
+
+    // A playback endpoint arrives twice, once as itself and once as the loopback source that
+    // taps it, both under the same id. The baseline must not grow a copy for each.
+    var withLoopback = new AppSettings();
+    var sameEndpointAsLoopback = theirs with { Kind = AudioSourceKind.Loopback };
+    CableOwnership.ObserveCables(withLoopback, [theirs, sameEndpointAsLoopback]);
+
+    Check("an endpoint seen twice is recorded once",
+        withLoopback.ForeignCableIds.Count == 1, $"recorded {withLoopback.ForeignCableIds.Count}");
     Check("a cable that was here first may not be renamed",
         !CableOwnership.MayClaim(settings, theirs), "it was claimable");
 
@@ -217,6 +229,67 @@ bool Guard(
 
     Check("releasing a cable that is gone still drops the claim",
         settings.ClaimedCables.Count == 0, $"{settings.ClaimedCables.Count} left");
+}
+
+// The empty state somebody with no cable sees. Worth its own check because at any non zero
+// count a binding that does not resolve looks exactly like one that does: both leave the
+// panel collapsed. Only the zero case can tell them apart.
+{
+    Visibility atZero = Visibility.Collapsed;
+    Visibility atThree = Visibility.Visible;
+
+    const string Markup = """
+        <StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+          <StackPanel.Style>
+            <Style TargetType="StackPanel">
+              <Setter Property="Visibility" Value="Collapsed" />
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding Inlets.Count}" Value="0">
+                  <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </StackPanel.Style>
+          <TextBlock Text="no cable here" />
+        </StackPanel>
+        """;
+
+    Visibility MeasureAt(int inletCount)
+    {
+        var box = new VirtualOutputNodeViewModel("box", "Efe") { Inlets = [] };
+
+        for (int i = 0; i < inletCount; i++)
+        {
+            box.Inlets!.Add(new CableInlet(
+                new AudioDeviceInfo($"feed{i}", "System", "Elgato", AudioSourceKind.Render, false),
+                new AudioDeviceInfo($"pick{i}", "Chat Mix", "Elgato", AudioSourceKind.Capture, false)));
+        }
+
+        var panel = (StackPanel)XamlReader.Parse(Markup);
+        var host = new Border { Child = panel, DataContext = box };
+
+        host.Measure(new Size(400, 400));
+        host.Arrange(new Rect(0, 0, 400, 400));
+        host.UpdateLayout();
+
+        return panel.Visibility;
+    }
+
+    // WPF needs a single threaded apartment, which a console app does not start in.
+    var ui = new Thread(() =>
+    {
+        atZero = MeasureAt(0);
+        atThree = MeasureAt(3);
+    });
+
+    ui.SetApartmentState(ApartmentState.STA);
+    ui.Start();
+    ui.Join();
+
+    Check("with no cable on the machine the picker explains itself",
+        atZero == Visibility.Visible, $"the empty state was {atZero}");
+    Check("and gets out of the way once there is one",
+        atThree == Visibility.Collapsed, $"the empty state was {atThree}");
 }
 
 Console.WriteLine();

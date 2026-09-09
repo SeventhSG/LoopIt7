@@ -4,7 +4,7 @@
   A patchbay for Windows audio. Name your own outputs, send programs to
   them, and fan them out anywhere.
 
-  Version 1.3.0
+  Version 1.4.0
   Built by SeventhSG
   https://github.com/SeventhSG/LoopIt7
 

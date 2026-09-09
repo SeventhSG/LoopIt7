@@ -31,6 +31,38 @@ public static class CableOwnership
     public const string OwnedInterfaceName = "LoopIt7";
 
     /// <summary>
+    /// What a cable LoopIt7 owns is called before anything on the canvas has a better name
+    /// for it.
+    /// <para>
+    /// It is the name a DAW, Discord or OBS shows in its own output list, and the only handle
+    /// anybody has on this. "CABLE Input" is the name nobody was told to look for.
+    /// </para>
+    /// </summary>
+    public const string DefaultName = "LoopIt7 Cable";
+
+    /// <summary>
+    /// The default name to give the next cable, kept clear of the ones already in use. Two
+    /// endpoints called the same thing in Windows' own list is the failure this avoids: the
+    /// user picks one of them in their DAW and has no way to tell which.
+    /// </summary>
+    public static string DefaultNameFor(AppSettings settings)
+    {
+        var taken = settings.ClaimedCables
+            .Select(c => c.ClaimedName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (!taken.Contains(DefaultName)) return DefaultName;
+
+        for (int n = 2; n < 100; n++)
+        {
+            string candidate = $"{DefaultName} {n}";
+            if (!taken.Contains(candidate)) return candidate;
+        }
+
+        return DefaultName;
+    }
+
+    /// <summary>
     /// What to call the two ends of a cable LoopIt7 has taken over.
     /// <para>
     /// They get different names on purpose. The playback end is the one somebody picks in
@@ -181,6 +213,44 @@ public static class CableOwnership
         VirtualCableService.IsVirtual(device) &&
         settings.OwnCableIds.Contains(device.Id, StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Whether LoopIt7 may name this cable without being asked, which is what happens the
+    /// first time it sees a cable its own installer put there.
+    /// <para>
+    /// The extra test on top of <see cref="MayClaim"/> is the user having handed a name back.
+    /// Ownership alone would have the next device refresh rename the cable straight back
+    /// again, and "give the name back" has to mean permanently or it means nothing.
+    /// </para>
+    /// </summary>
+    public static bool MayNameUnasked(AppSettings settings, AudioDeviceInfo device) =>
+        MayClaim(settings, device) &&
+        !settings.ReleasedCableIds.Contains(device.Id, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Hands a cable that was already on this machine over to LoopIt7, because the user said
+    /// to in as many words.
+    /// <para>
+    /// This is the one door through the rule above, and it only opens from the outside. Every
+    /// automatic path refuses a cable that was here first, because renaming one breaks OBS
+    /// scenes and Discord settings that were pointing at the old name. A user who chooses it
+    /// on the Devices page knows what they own and has been told the old name comes back when
+    /// LoopIt7 is uninstalled, which is the difference between a choice and an ambush.
+    /// </para>
+    /// </summary>
+    public static void Adopt(AppSettings settings, params AudioDeviceInfo[] ends)
+    {
+        foreach (var end in ends)
+        {
+            settings.ForeignCableIds.RemoveAll(id => string.Equals(id, end.Id, StringComparison.OrdinalIgnoreCase));
+            settings.ReleasedCableIds.RemoveAll(id => string.Equals(id, end.Id, StringComparison.OrdinalIgnoreCase));
+
+            if (!settings.OwnCableIds.Contains(end.Id, StringComparer.OrdinalIgnoreCase))
+            {
+                settings.OwnCableIds.Add(end.Id);
+            }
+        }
+    }
+
     /// <summary>True when this endpoint is one LoopIt7 installed and renamed.</summary>
     public static bool IsOwned(AppSettings settings, AudioDeviceInfo device) =>
         FindClaim(settings, device) is not null;
@@ -241,22 +311,13 @@ public static class CableOwnership
             return false;
         }
 
-        var (feedName, pickupName) = NamesFor(name, VirtualCableService.VendorOf(render));
-
-        if (!EndpointNaming.TryWrite(render, feedName, out error)) return false;
-
-        if (!EndpointNaming.TryWrite(capture, pickupName, out error))
-        {
-            // Put the end that did take back, rather than leaving the cable half renamed.
-            EndpointNaming.TryWrite(render, renderNames, out _);
-            return false;
-        }
+        if (!WriteBothEnds(render, capture, name, renderNames, out error)) return false;
 
         settings.ClaimedCables.Add(new CableClaimSettings
         {
             RenderEndpointId = render.Id,
             CaptureEndpointId = capture.Id,
-            ClaimedName = feedName.Name,
+            ClaimedName = name.Trim(),
             OriginalRenderName = renderNames.Name,
             OriginalRenderInterface = renderNames.InterfaceName,
             OriginalCaptureName = captureNames.Name,
@@ -265,6 +326,97 @@ public static class CableOwnership
 
         error = null;
         return true;
+    }
+
+    /// <summary>
+    /// Renames a cable LoopIt7 already owns. The names it arrived with are the ones recorded
+    /// on the claim, so they are left alone: however many times a cable is renamed, handing it
+    /// back still puts the machine into the state LoopIt7 found it in.
+    /// </summary>
+    public static bool TryRename(
+        AppSettings settings,
+        CableClaimSettings claim,
+        string name,
+        IEnumerable<AudioDeviceInfo> devices,
+        out string? error)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            error = "A cable needs a name.";
+            return false;
+        }
+
+        var byId = devices.ToDictionary(d => d.Id, StringComparer.OrdinalIgnoreCase);
+
+        if (!byId.TryGetValue(claim.RenderEndpointId, out var render) ||
+            !byId.TryGetValue(claim.CaptureEndpointId, out var capture))
+        {
+            error = "One end of that cable is not on this machine any more.";
+            return false;
+        }
+
+        var current = EndpointNaming.TryRead(render);
+        if (current is null)
+        {
+            error = "Windows has no record of that endpoint.";
+            return false;
+        }
+
+        if (!WriteBothEnds(render, capture, name, current, out error)) return false;
+
+        claim.ClaimedName = name.Trim();
+        return true;
+    }
+
+    /// <summary>
+    /// Writes a name onto both ends of a cable, or onto neither. A half renamed cable is worse
+    /// than one that was never touched: the two ends stop reading as one thing, and the user
+    /// has no way of telling which half moved.
+    /// </summary>
+    private static bool WriteBothEnds(
+        AudioDeviceInfo render,
+        AudioDeviceInfo capture,
+        string name,
+        EndpointNames renderWas,
+        out string? error)
+    {
+        var (feedName, pickupName) = NamesFor(name, VirtualCableService.VendorOf(render));
+
+        if (!EndpointNaming.TryWrite(render, feedName, out error)) return false;
+
+        if (!EndpointNaming.TryWrite(capture, pickupName, out error))
+        {
+            // Put the end that did take back, rather than leaving the cable half renamed.
+            EndpointNaming.TryWrite(render, renderWas, out _);
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Gives a cable back for good, at the user's asking: the names it came with are restored
+    /// and it is marked so that nothing here ever names it again on its own.
+    /// <para>
+    /// The marker is the point. Without it the cable is still one LoopIt7 owns, and the next
+    /// device refresh would put the name straight back on.
+    /// </para>
+    /// </summary>
+    public static bool Disown(
+        AppSettings settings,
+        CableClaimSettings claim,
+        IEnumerable<AudioDeviceInfo> devices,
+        out string? error)
+    {
+        foreach (string id in new[] { claim.RenderEndpointId, claim.CaptureEndpointId })
+        {
+            if (id.Length > 0 && !settings.ReleasedCableIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+            {
+                settings.ReleasedCableIds.Add(id);
+            }
+        }
+
+        return TryRelease(settings, claim, devices, out error);
     }
 
     /// <summary>

@@ -35,12 +35,19 @@ public static class VirtualCableService
 
     public const string RecommendedCableName = "VB-Audio Virtual Cable";
 
+    /// <summary>
+    /// Matched in order, most specific first. VoiceMeeter has to be tested before the plain
+    /// "vb-audio", because its driver says "VB-Audio VoiceMeeter VAIO" and one vendor string
+    /// covers three unrelated products. Getting that wrong pairs a VB-CABLE playback end with
+    /// a VoiceMeeter recording end on any machine that has both, which is exactly the silent
+    /// failure this file exists to prevent.
+    /// </summary>
     private static readonly (string Fragment, string Family, string Vendor)[] KnownCables =
     [
+        ("voicemeeter", "VoiceMeeter", "VB-Audio"),
         ("cable input", "VB-Audio Cable", "VB-Audio"),
         ("cable output", "VB-Audio Cable", "VB-Audio"),
         ("vb-audio", "VB-Audio Cable", "VB-Audio"),
-        ("voicemeeter", "VoiceMeeter", "VB-Audio"),
         ("virtual audio cable", "Virtual Audio Cable", "VAC"),
         ("elgato virtual audio", "Elgato", "Elgato"),
         ("nvidia virtual audio", "NVIDIA Broadcast", "NVIDIA"),
@@ -48,6 +55,18 @@ public static class VirtualCableService
         ("virtual cable", "Virtual cable", ""),
         ("loopit7 cable", "LoopIt7 Cable", "")
     ];
+
+    /// <summary>
+    /// The families that are cables and nothing else: a driver whose whole job is carrying
+    /// audio from one program to another.
+    /// <para>
+    /// Wave Link's mixes, VoiceMeeter's VAIO and NVIDIA Broadcast are virtual devices too, but
+    /// each one is a part of a larger program that is wired to it by name. They are fine to
+    /// route to and no use to anyone as a device LoopIt7 has renamed.
+    /// </para>
+    /// </summary>
+    private static readonly string[] PlainCableFamilies =
+        ["VB-Audio Cable", "Virtual Audio Cable", "Virtual cable", "LoopIt7 Cable"];
 
     /// <summary>
     /// True when this endpoint is a software cable rather than a physical output. Cables are
@@ -79,6 +98,15 @@ public static class VirtualCableService
     }
 
     public static bool AnyInstalled(IEnumerable<AudioDeviceInfo> devices) => devices.Any(IsVirtual);
+
+    /// <summary>
+    /// True when this endpoint is a general purpose cable rather than one program's own
+    /// virtual device. It is the test for whether a cable can reasonably be given a different
+    /// name: taking over Wave Link's "System" would quietly break Wave Link.
+    /// </summary>
+    public static bool IsPlainCable(AudioDeviceInfo device) =>
+        FamilyOf(device) is { } family &&
+        PlainCableFamilies.Contains(family, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// A cable has two ends: the playback endpoint you send to, and the recording endpoint the

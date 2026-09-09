@@ -307,6 +307,51 @@ public sealed class SourceNodeViewModel : PatchNodeViewModel
     public int ProcessId { get; set; }
     public string ExecutableName { get; }
 
+    /// <summary>
+    /// True when this box is a cable's recording end rather than a microphone: a way in from
+    /// the rest of Windows, fed by whatever program was pointed at the cable's other end.
+    /// <para>
+    /// Worth telling apart on the canvas. A microphone hears a room; this hears whichever
+    /// program was told to play into it, and the two want different things said about them.
+    /// </para>
+    /// </summary>
+    public bool IsVirtualInput { get; init; }
+
+    private string? _inletHint;
+
+    /// <summary>
+    /// What to choose in the other program so its audio arrives here. Null for a real input,
+    /// where the answer is a cable and a microphone stand rather than anything on screen.
+    /// </summary>
+    public string? InletHint
+    {
+        get => _inletHint;
+        set
+        {
+            if (SetProperty(ref _inletHint, value)) OnPropertyChanged(nameof(HasInletHint));
+        }
+    }
+
+    public bool HasInletHint => !string.IsNullOrEmpty(_inletHint);
+
+    private string? _inletBadge;
+
+    /// <summary>
+    /// The short form for the line under the title, "via LoopIt7 Cable". Left empty when the
+    /// box is already named after the cable, because saying the same word twice on one card
+    /// tells nobody anything.
+    /// </summary>
+    public string? InletBadge
+    {
+        get => _inletBadge;
+        set
+        {
+            if (SetProperty(ref _inletBadge, value)) OnPropertyChanged(nameof(HasInletBadge));
+        }
+    }
+
+    public bool HasInletBadge => !string.IsNullOrEmpty(_inletBadge);
+
     public override bool IsSource => true;
 
     /// <summary>Only a program can be taken off its own output. A microphone has none.</summary>
@@ -337,7 +382,7 @@ public sealed class SourceNodeViewModel : PatchNodeViewModel
 
     public override string Glyph => Kind switch
     {
-        SourceKind.Device => "\uE720",           // microphone
+        SourceKind.Device => IsVirtualInput ? "\uE71B" : "\uE720",   // a cable, or a microphone
         SourceKind.DeviceLoopback => "\uE767",   // a speaker, tapped on the way out
         _ => "\uECAA"                            // application
     };
@@ -393,8 +438,13 @@ public sealed class VirtualOutputNodeViewModel : PatchNodeViewModel
     public string? InletBadge
     {
         get => _inletBadge;
-        set => SetProperty(ref _inletBadge, value);
+        set
+        {
+            if (SetProperty(ref _inletBadge, value)) OnPropertyChanged(nameof(HasInletBadge));
+        }
     }
+
+    public bool HasInletBadge => !string.IsNullOrEmpty(_inletBadge);
 
     /// <summary>
     /// The cables that could give this box a way in from Windows, shared with the rest of the

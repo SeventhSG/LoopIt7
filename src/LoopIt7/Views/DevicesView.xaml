@@ -13,25 +13,77 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Only shown when the machine has no software cable at all. -->
-        <Border Grid.Row="0" Style="{StaticResource Card}" Background="{StaticResource SunkenBrush}"
-                Padding="16,14" Margin="0,0,0,12"
-                Visibility="{Binding HasVirtualCable, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Margin="0,0,16,0">
-                    <TextBlock Text="No software cable is installed" Style="{StaticResource SectionLabel}" />
-                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,5,0,0"
-                               Text="LoopIt7 can send audio to any output on this machine, and it can capture a single program without one. To hand a mix to another program as if it were a microphone, Windows needs a virtual cable, and a virtual cable is a signed kernel driver. VB-Audio's is free and takes a minute to install." />
-                </StackPanel>
-                <Button Grid.Column="1" Style="{StaticResource GhostButton}" VerticalAlignment="Center"
-                        Command="{Binding OpenCableSiteCommand}"
-                        Content="Get VB-Cable" />
-            </Grid>
-        </Border>
+        <StackPanel Grid.Row="0">
+            <!-- Only shown when the machine has no software cable at all. -->
+            <Border Style="{StaticResource Card}" Background="{StaticResource SunkenBrush}"
+                    Padding="16,14" Margin="0,0,0,12"
+                    Visibility="{Binding HasVirtualCable, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                        <TextBlock Text="No software cable is installed" Style="{StaticResource SectionLabel}" />
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,5,0,0"
+                                   Text="LoopIt7 can send audio to any output on this machine, and it can capture a single program without one. To hand a mix to another program as if it were a microphone, Windows needs a virtual cable, and a virtual cable is a signed kernel driver. VB-Audio's is free and takes a minute to install." />
+                    </StackPanel>
+                    <Button Grid.Column="1" Style="{StaticResource GhostButton}" VerticalAlignment="Center"
+                            Command="{Binding OpenCableSiteCommand}"
+                            Content="Get VB-Cable" />
+                </Grid>
+            </Border>
+
+            <!--
+                The cable carrying LoopIt7's name. It is the one thing on this page other programs
+                can see, so it says the name outright rather than leaving it to be spotted in the
+                list below.
+            -->
+            <Border Style="{StaticResource Card}" Background="{StaticResource SunkenBrush}"
+                    Padding="16,14" Margin="0,0,0,12"
+                    Visibility="{Binding HasOwnCable, Converter={StaticResource BoolToVisibility}}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                        <TextBlock Text="{Binding OwnCableName, StringFormat='Windows reaches LoopIt7 through {0}'}"
+                                   Style="{StaticResource SectionLabel}" />
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,5,0,0"
+                                   Text="Choose it as the output in a DAW, Discord or anything else, and what it plays arrives in LoopIt7 as an input. The cable itself is somebody else's driver wearing our name; giving the name back leaves the driver in place." />
+                    </StackPanel>
+                    <Button Grid.Column="1" Style="{StaticResource GhostButton}" VerticalAlignment="Center"
+                            Command="{Binding ReleaseCableCommand}"
+                            Content="Give the name back" />
+                </Grid>
+            </Border>
+
+            <!--
+                A cable that was here before LoopIt7. Never renamed on its own, because somebody's
+                OBS scene is pointing at the name it has. Offered, because a machine that already
+                has one never gets a cable from our installer either.
+            -->
+            <Border Style="{StaticResource Card}" Background="{StaticResource SunkenBrush}"
+                    Padding="16,14" Margin="0,0,0,12"
+                    Visibility="{Binding CanAdoptCable, Converter={StaticResource BoolToVisibility}}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                        <TextBlock Text="{Binding AdoptableCableName, StringFormat='{}{0} was here before LoopIt7'}"
+                                   Style="{StaticResource SectionLabel}" />
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,5,0,0"
+                                   Text="LoopIt7 leaves cables it did not install named the way their owner set them, because other programs are pointing at those names. Hand this one over and both of its ends read as LoopIt7 Cable everywhere on the machine. Anything currently sending to it will need pointing at the new name, and uninstalling LoopIt7 puts the old one back." />
+                    </StackPanel>
+                    <Button Grid.Column="1" Style="{StaticResource GhostButton}" VerticalAlignment="Center"
+                            Command="{Binding AdoptCableCommand}"
+                            Content="Name it LoopIt7 Cable" />
+                </Grid>
+            </Border>
+        </StackPanel>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                       Padding="0,0,10,0">

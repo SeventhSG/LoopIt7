@@ -246,7 +246,7 @@
                                        MaxWidth="140" TextTrimming="CharacterEllipsis"
                                        Foreground="{StaticResource AccentBrush}"
                                        ToolTip="{Binding InletHint}"
-                                       Visibility="{Binding HasInletHint, Converter={StaticResource BoolToVisibility}, FallbackValue=Collapsed}" />
+                                       Visibility="{Binding HasInletBadge, Converter={StaticResource BoolToVisibility}, FallbackValue=Collapsed}" />
                             <TextBlock Text="{Binding StatusText}" Margin="8,0,0,0">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">

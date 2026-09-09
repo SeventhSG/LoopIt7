@@ -84,9 +84,13 @@ Until that is solved, LoopIt7 does everything that needs no driver, and for the 
 that does, it uses whatever cable is already installed and names both of its ends for the
 user.
 
-A virtual output can be given a way in from Windows by binding it to a cable: the other
-program sends to the cable's playback end, LoopIt7 listens on its recording end. One cable
-serves one box, so how many boxes Windows can see is how many cables are installed.
+A cable is also the only way anything in Windows can play *into* LoopIt7. Add source offers
+every cable pairing under "From another program", and picking one puts a source box on the
+canvas fed by the cable's recording end: that is the half a DAW wants, and it is a plain
+source, patchable anywhere a microphone is. A virtual output can be given the same way in by
+binding it to a cable instead, when what arrives should be summed with other programs before
+it leaves. One cable serves one box either way, so how many ways in Windows can see is how
+many cables are installed.
 
 The installer bundles VB-Audio's cable when their redistributable is sitting in
 `installer/cable/`, and builds and works without it when it is not, so the licensing answer
@@ -105,9 +109,23 @@ licence to rename the others.
 
 Which cables LoopIt7 may rename is decided in `CableOwnership`, and the rule is narrow on
 purpose. A cable that was on the machine before LoopIt7 ever asked for one is never
-renamed, because other people's OBS scenes and Discord settings point at that name. Only a
-cable that arrived *after* the user followed LoopIt7's own prompt to get one is ours to
-name, and the uninstaller runs `LoopIt7.exe --release-cables` to put every name back.
+renamed *on its own*, because other people's OBS scenes and Discord settings point at that
+name. Only a cable that arrived *after* the user followed LoopIt7's own prompt to get one, or
+that our own setup installed, is ours to name unasked, and the uninstaller runs
+`LoopIt7.exe --release-cables` to put every name back.
+
+A cable that is ours gets named `CableOwnership.DefaultName`, "LoopIt7 Cable", the first time
+the app sees it, rather than waiting to be wired to something. The name is the only handle a
+DAW or Discord has on the way in, and a cable sitting there called "CABLE Input" is a way in
+nobody was told to look for. Binding it to a virtual output renames it after that box.
+
+There is exactly one door through the narrow rule, `CableOwnership.Adopt`, and it only opens
+from the user's side: the Devices page offers to take over a cable that was here first, naming
+the device it would change and saying the old name comes back on uninstall. It exists because
+a machine that already has VB-CABLE never gets one from our installer either, so without it
+the person most likely to want LoopIt7's name is the one who could never have it. Nothing
+automatic may call it. `ReleasedCableIds` is the other half of that promise: a name given back
+stays given back, or the next device refresh would put it straight on again.
 
 ## Style
 

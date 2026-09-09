@@ -154,16 +154,22 @@ inside the app: it will not appear in the Windows sound settings. Programs
 reach it by being assigned to it here instead of choosing it there.
 
 
-GIVING A BOX A WAY IN
+A WAY IN FROM WINDOWS
 -------------------------------------------------------------------------------
 
-If you want other programs to choose your box themselves, press the link button
-on it and pick a cable.
+Add source lists FROM ANOTHER PROGRAM at the top. Those are cables, and picking
+one puts a box on the canvas fed by whatever is playing into it.
 
 A cable is a free driver with two ends. The other program sends to one end,
-LoopIt7 listens on the other, and what arrives lands in your box and leaves
-down its cables as usual. The picker lists the two ends as a pair, so nothing
-is guessed, and it says which end LoopIt7 will open.
+LoopIt7 listens on the other, and what arrives is a source like any microphone.
+The picker lists the two ends as a pair, so nothing is guessed, and it says
+which end LoopIt7 will open.
+
+This is the half a DAW wants. Set the DAW's output device to LoopIt7 Cable and
+the DAW is on your canvas, ready to patch to as many outputs as you like.
+
+The same cable can instead be given to a virtual output, with the link button on
+the box, when you want what arrives summed with other programs before it leaves.
 
 If there is no cable on this machine the picker says so and offers to fetch
 one. LoopIt7 recognises VB-Audio Cable, VoiceMeeter, Elgato Virtual Audio and
@@ -171,11 +177,22 @@ NVIDIA Broadcast, and points you at VB-Audio's free cable if you have none:
 
     https://vb-audio.com/Cable/
 
-A cable LoopIt7 asked you to install is named after the box it serves, so the
-name in Discord's list is the name on your canvas. A cable that was already on
-the machine keeps the name it came with, because other programs are pointing at
-that name and it is not ours to change. Uninstalling LoopIt7 puts back every
-name it changed.
+
+WHAT THE CABLE IS CALLED
+-------------------------------------------------------------------------------
+
+A cable LoopIt7 installed is called LoopIt7 Cable from the first time the app
+sees it, in every program's device list on the machine. That name is the only
+handle anything outside LoopIt7 has on it. Give the cable to a virtual output
+and it takes that box's name instead, so the name in Discord's list is the name
+on your canvas.
+
+A cable that was already on the machine keeps the name it came with, because
+other programs are pointing at that name and it is not ours to change. The
+Devices page will offer to take one over if you want it to, and it names the
+device it would rename before you agree.
+
+Uninstalling LoopIt7 puts back every name it changed.
 
 
 CABLE CONTROLS

@@ -125,6 +125,12 @@ public sealed class AppSettings
     public List<string> OwnCableIds { get; set; } = [];
 
     /// <summary>
+    /// Cables the user has told LoopIt7 to stop naming. They stay owned, so a claim can be
+    /// taken again later, but nothing names them without being asked twice.
+    /// </summary>
+    public List<string> ReleasedCableIds { get; set; } = [];
+
+    /// <summary>
     /// Set while the user has been sent to get a cable and has not come back with one. It is
     /// the causal link that makes a new cable ours rather than a coincidence: without it, a
     /// VoiceMeeter installed next month would look like something LoopIt7 put there.

@@ -259,6 +259,16 @@ public partial class MainWindow : Window
         AddOutputPopup.IsOpen = false;
     }
 
+    /// <summary>
+    /// Sends the user off to get a cable and remembers that LoopIt7 asked, which is what makes
+    /// the one that turns up next ours to name.
+    /// </summary>
+    private void OnGetCableClick(object sender, RoutedEventArgs e)
+    {
+        _viewModel.RequestCable();
+        AddSourcePopup.IsOpen = false;
+    }
+
     private void OnPresetsClick(object sender, RoutedEventArgs e) => PresetsPopup.IsOpen = !PresetsPopup.IsOpen;
 
     private void OnOptionsClick(object sender, RoutedEventArgs e) => OptionsPopup.IsOpen = !OptionsPopup.IsOpen;

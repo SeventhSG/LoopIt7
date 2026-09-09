@@ -59,6 +59,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private int _liveNodeCount;
     private string _newVirtualOutputName = string.Empty;
 
+    /// <summary>The cable carrying LoopIt7's own name, and the one that could be asked to.</summary>
+    private CableInlet? _ownCable;
+    private CableInlet? _adoptableCable;
+
     /// <summary>
     /// Programs we have muted in the Windows volume mixer, and the process id we muted, so
     /// every one of them can be handed back no matter how the app is closed.
@@ -92,6 +96,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         DeletePresetCommand = new RelayCommand(p => DeletePreset(p as PatchPreset));
         OpenSettingsFolderCommand = new RelayCommand(_ => OpenSettingsFolder());
         OpenCableSiteCommand = new RelayCommand(_ => OpenUrl(VirtualCableService.RecommendedCableUrl));
+        AdoptCableCommand = new RelayCommand(_ => AdoptCable(), _ => CanAdoptCable);
+        ReleaseCableCommand = new RelayCommand(_ => ReleaseCable(), _ => HasOwnCable);
         OpenProjectCommand = new RelayCommand(_ => OpenUrl(ProjectUrl));
         SelectTabCommand = new RelayCommand(p =>
         {
@@ -183,6 +189,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand DeletePresetCommand { get; }
     public RelayCommand OpenSettingsFolderCommand { get; }
     public RelayCommand OpenCableSiteCommand { get; }
+    public RelayCommand AdoptCableCommand { get; }
+    public RelayCommand ReleaseCableCommand { get; }
     public RelayCommand OpenProjectCommand { get; }
     public RelayCommand SelectTabCommand { get; }
 
@@ -238,6 +246,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public bool CanCreateVirtualOutput => !string.IsNullOrWhiteSpace(_newVirtualOutputName);
 
     public bool HasVirtualCable => OutputDevices.Any(VirtualCableService.IsVirtual);
+
+    /// <summary>What other programs see in their own device list when they want to reach LoopIt7.</summary>
+    public string? OwnCableName => _ownCable?.Feed.Name;
+
+    public bool HasOwnCable => _ownCable is not null;
+
+    /// <summary>The cable LoopIt7 would rename if asked, named so the offer says which one.</summary>
+    public string? AdoptableCableName => _adoptableCable?.Feed.Name;
+
+    /// <summary>
+    /// Only offered while LoopIt7 has no cable of its own. One way in is what the app needs,
+    /// and a second name in every program's list would be a choice nobody asked to make.
+    /// </summary>
+    public bool CanAdoptCable => _adoptableCable is not null && _ownCable is null;
 
     public string RecommendedCableName => VirtualCableService.RecommendedCableName;
 
@@ -474,7 +496,44 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             case AudioApplication application:
                 AddApplicationSource(application);
                 break;
+            case CableInlet inlet:
+                AddVirtualInput(inlet);
+                break;
         }
+    }
+
+    /// <summary>
+    /// The one sentence a box fed by a cable needs. Written once because it is the whole
+    /// instruction: everything else about a cable is invisible from the other program.
+    /// </summary>
+    private static string InletHintFor(AudioDeviceInfo feed) =>
+        $"Choose \"{feed.Name}\" as the output in the program that should play into LoopIt7. It arrives here.";
+
+    /// <summary>
+    /// Puts the way in from Windows on the canvas as a box of its own: the other program sends
+    /// to the cable's playback end, LoopIt7 listens on its recording end, and what arrives can
+    /// be patched anywhere a microphone could.
+    /// <para>
+    /// This is the half of the cable a DAW needs. A virtual output is a box other programs play
+    /// into on their way somewhere else; this is the same trick with nothing bolted on top,
+    /// which is what somebody who only wants their DAW heard inside LoopIt7 is after.
+    /// </para>
+    /// </summary>
+    public SourceNodeViewModel AddVirtualInput(CableInlet inlet)
+    {
+        var existing = Sources.FirstOrDefault(s =>
+            s.Kind == SourceKind.Device &&
+            string.Equals(s.DeviceId, inlet.Pickup.Id, StringComparison.OrdinalIgnoreCase));
+
+        if (existing is not null)
+        {
+            Notice = $"{existing.Title} is already on the canvas. {existing.InletHint ?? InletHintFor(inlet.Feed)}";
+            return existing;
+        }
+
+        var created = AddDeviceSource(inlet.Pickup, loopback: false);
+        Notice = created.InletHint;
+        return created;
     }
 
     private void AddDestinationFromDescriptor(object? descriptor)
@@ -485,10 +544,27 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private SourceNodeViewModel AddDeviceSource(AudioDeviceInfo device, bool loopback, NodeSettings? saved = null)
     {
         var kind = loopback ? SourceKind.DeviceLoopback : SourceKind.Device;
-        string title = saved?.Title ?? device.Name;
-        string subtitle = saved?.Subtitle ?? (loopback ? "system audio" : device.InterfaceName);
 
-        var vm = new SourceNodeViewModel(saved?.Id ?? NewId(), title, subtitle, kind, device.Id, 0, string.Empty);
+        // A cable's recording end is not a microphone. It is the way in from the rest of
+        // Windows: something else on this machine was told to play into the other end of the
+        // same cable. The box reads as that other end, because its name is the only part of
+        // this the user ever sees anywhere else.
+        var feed = !loopback && VirtualCableService.IsVirtual(device)
+            ? VirtualCableService.FindFeedEndpoints(device, OutputDevices).FirstOrDefault()
+            : null;
+
+        string title = saved?.Title ?? feed?.Name ?? device.Name;
+        string subtitle = saved?.Subtitle ?? (loopback ? "system audio" : feed is not null ? "virtual input" : device.InterfaceName);
+
+        var vm = new SourceNodeViewModel(saved?.Id ?? NewId(), title, subtitle, kind, device.Id, 0, string.Empty)
+        {
+            IsVirtualInput = feed is not null,
+            InletBadge = feed is null || string.Equals(title, feed.Name, StringComparison.Ordinal)
+                ? null
+                : $"via {feed.Name}",
+            InletHint = feed is null ? null : InletHintFor(feed)
+        };
+
         PlaceNode(vm, saved, LaneSourceX, Sources.Count);
         WireNode(vm);
 
@@ -634,9 +710,34 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return false;
         }
 
-        if (CableOwnership.MayClaim(_settings, feed) && !CableOwnership.IsOwned(_settings, feed))
+        // The cable takes the box's name, so the word in Discord's list and the word on the
+        // canvas are the same one. A cable LoopIt7 has already named is renamed in place: it
+        // has been called "LoopIt7 Cable" since the day it was installed, and claiming it a
+        // second time would lose the names it originally came with.
+        if (CableOwnership.MayClaim(_settings, feed))
         {
-            CableOwnership.TryClaim(_settings, feed, pickup, target.Title, out _);
+            bool renamed = CableOwnership.FindClaim(_settings, feed) is { } claim
+                ? CableOwnership.TryRename(_settings, claim, target.Title, OutputDevices.Concat(InputDevices), out _)
+                : CableOwnership.TryClaim(_settings, feed, pickup, target.Title, out _);
+
+            if (renamed)
+            {
+                _settingsService.Save(_settings);
+                RefreshDevices();
+
+                // Both ends answer to something else now. Say the new names rather than the
+                // ones the picker was showing a moment ago.
+                feed = OutputDevices.FirstOrDefault(d => d.Id == feed.Id) ?? feed;
+                pickup = InputDevices.FirstOrDefault(
+                    d => d.Id == pickup.Id && d.Kind == AudioSourceKind.Capture) ?? pickup;
+
+                if (source.IsVirtualInput)
+                {
+                    source.Title = feed.Name;
+                    source.InletBadge = $"via {feed.Name}";
+                    source.InletHint = InletHintFor(feed);
+                }
+            }
         }
 
         target.InletFeedDeviceId = feed.Id;
@@ -647,6 +748,61 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Notice = $"{target.Title} is reachable from Windows now. {target.InletHint}";
         error = null;
         return true;
+    }
+
+    /// <summary>
+    /// Hands a cable that was already on this machine to LoopIt7, because the user asked for
+    /// it in as many words.
+    /// <para>
+    /// Nothing automatic ever does this. A cable that was here first is named in somebody's
+    /// OBS scene or Discord settings, and renaming one behind their back breaks a setup we did
+    /// not build. But a machine that already has VB-CABLE never gets one from our installer,
+    /// so without this the person most likely to want LoopIt7's own name is the one who can
+    /// never have it. The offer says which device it will rename, and the uninstaller puts the
+    /// old name back.
+    /// </para>
+    /// </summary>
+    public void AdoptCable()
+    {
+        if (_adoptableCable is not { } inlet) return;
+
+        string was = inlet.Feed.Name;
+        string name = CableOwnership.DefaultNameFor(_settings);
+
+        CableOwnership.Adopt(_settings, inlet.Feed, inlet.Pickup);
+
+        if (!CableOwnership.TryClaim(_settings, inlet.Feed, inlet.Pickup, name, out string? error))
+        {
+            Notice = $"Could not rename {was}: {error}";
+            return;
+        }
+
+        _settingsService.Save(_settings);
+        RefreshDevices();
+        RebuildDeviceRows();
+
+        Notice = $"{was} is called \"{name}\" now. Pick that as the output in any program that should play into LoopIt7. Uninstalling LoopIt7 puts the old name back.";
+    }
+
+    /// <summary>
+    /// Gives the cable its old name back, for good. Marked as released so nothing here names
+    /// it again on the next device refresh, which is what "give it back" has to mean.
+    /// </summary>
+    public void ReleaseCable()
+    {
+        if (_ownCable is not { } inlet) return;
+        if (CableOwnership.FindClaim(_settings, inlet.Feed) is not { } claim) return;
+
+        string was = claim.ClaimedName;
+        bool restored = CableOwnership.Disown(_settings, claim, OutputDevices.Concat(InputDevices), out string? error);
+
+        _settingsService.Save(_settings);
+        RefreshDevices();
+        RebuildDeviceRows();
+
+        Notice = restored
+            ? $"\"{was}\" is back to the name it came with. LoopIt7 will not rename it again unless you ask."
+            : $"Could not put the old name back: {error}";
     }
 
     /// <summary>
@@ -821,9 +977,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var feed = OutputDevices.FirstOrDefault(
             d => string.Equals(d.Id, box.InletFeedDeviceId, StringComparison.OrdinalIgnoreCase));
 
+        // The cable is still LoopIt7's; it just no longer serves this box. So it goes back to
+        // LoopIt7's own name rather than the vendor's: the way in from Windows still exists,
+        // and something has to be there for the other program to pick.
         if (feed is not null && CableOwnership.FindClaim(_settings, feed) is { } claim)
         {
-            CableOwnership.TryRelease(_settings, claim, OutputDevices.Concat(InputDevices), out _);
+            CableOwnership.TryRename(
+                _settings, claim, CableOwnership.DefaultNameFor(_settings),
+                OutputDevices.Concat(InputDevices), out _);
+
             _settingsService.Save(_settings);
         }
 
@@ -1090,6 +1252,28 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void RefreshDevices()
     {
+        ReadEndpoints();
+
+        bool changed = CableOwnership.ObserveCables(_settings, OutputDevices.Concat(InputDevices));
+
+        if (NameOwnCable())
+        {
+            // The endpoints answer to a different name now, and every list in the app is
+            // still holding the one they had a second ago. Read them again rather than
+            // showing the old names until the next time Windows says something changed.
+            ReadEndpoints();
+            changed = true;
+        }
+
+        // Saved even mid load: a rename that is not written down is a device left carrying
+        // LoopIt7's name with nothing on disk saying how to put it back.
+        if (changed) _settingsService.Save(_settings);
+
+        UpdateCableStatus();
+    }
+
+    private void ReadEndpoints()
+    {
         var sources = _devices.GetInputSources();
         SyncDevices(InputDevices, sources);
         SyncDevices(CaptureDevices, [.. sources.Where(d => d.Kind == AudioSourceKind.Capture)]);
@@ -1097,11 +1281,68 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         SyncDevices(OutputDevices, _devices.GetOutputs());
         Sync(CableInlets, VirtualCableService.FindInlets(OutputDevices, InputDevices));
         OnPropertyChanged(nameof(HasVirtualCable));
+    }
 
-        if (CableOwnership.ObserveCables(_settings, OutputDevices.Concat(InputDevices)) && !_loading)
+    /// <summary>
+    /// Puts LoopIt7's name on a cable of its own the moment one turns up, without waiting to
+    /// be asked.
+    /// <para>
+    /// The cable is the only way anything else in Windows can reach LoopIt7: a DAW, Discord
+    /// and OBS all pick it by name from their own output list. A cable sitting there called
+    /// "CABLE Input" is a way in nobody was told to look for, so the name goes on as soon as
+    /// the cable exists rather than when the user first wires something up.
+    /// </para>
+    /// <para>
+    /// Only a cable LoopIt7 installed, or one fetched at its asking, is touched.
+    /// <see cref="CableOwnership"/> holds that line, and the names being replaced are written
+    /// down so the uninstaller can put them back.
+    /// </para>
+    /// </summary>
+    /// <returns>True when something was renamed, so the caller knows to look again.</returns>
+    private bool NameOwnCable()
+    {
+        bool renamed = false;
+
+        foreach (var inlet in CableInlets.ToList())
         {
-            _settingsService.Save(_settings);
+            if (!CableOwnership.MayNameUnasked(_settings, inlet.Feed)) continue;
+            if (!CableOwnership.MayNameUnasked(_settings, inlet.Pickup)) continue;
+            if (CableOwnership.IsOwned(_settings, inlet.Feed)) continue;
+
+            if (CableOwnership.TryClaim(
+                    _settings, inlet.Feed, inlet.Pickup, CableOwnership.DefaultNameFor(_settings), out _))
+            {
+                renamed = true;
+            }
         }
+
+        return renamed;
+    }
+
+    /// <summary>
+    /// Works out what the Devices page has to say about naming: which cable carries LoopIt7's
+    /// name, and which one could be asked to.
+    /// </summary>
+    private void UpdateCableStatus()
+    {
+        var inlets = CableInlets.ToList();
+
+        _ownCable = inlets.FirstOrDefault(i => CableOwnership.IsOwned(_settings, i.Feed));
+
+        // Only a cable that is a cable and nothing else. Wave Link's mixes and VoiceMeeter's
+        // VAIO are virtual devices too, and each one is part of a program that finds it by the
+        // name it has: renaming one of those would break the program it belongs to, and the
+        // user asking for it would not have meant that.
+        _adoptableCable = inlets
+            .Where(i => !CableOwnership.IsOwned(_settings, i.Feed))
+            .Where(i => VirtualCableService.IsPlainCable(i.Feed))
+            .OrderByDescending(i => VirtualCableService.FamilyOf(i.Feed) == "VB-Audio Cable")
+            .FirstOrDefault();
+
+        OnPropertyChanged(nameof(OwnCableName));
+        OnPropertyChanged(nameof(HasOwnCable));
+        OnPropertyChanged(nameof(AdoptableCableName));
+        OnPropertyChanged(nameof(CanAdoptCable));
     }
 
     private static void SyncDevices(ObservableCollection<AudioDeviceInfo> target, IReadOnlyList<AudioDeviceInfo> fresh)

@@ -130,16 +130,27 @@ driver and nothing in user space can add one. What the box does instead is take 
 the LoopIt7 side: you assign them, LoopIt7 captures each one, mutes it where Windows was
 sending it, and plays the sum wherever you have pointed the box.
 
-**Giving a box a way in.** If you want other programs to choose the box themselves, press the
-link button on it and pick a cable. A cable is a free driver with two ends: the other program
-sends to one end, LoopIt7 listens on the other, and what arrives lands in your box and leaves
-down its cables as usual. The picker lists the ends as pairs, so nothing is guessed, and if
-there is no cable on the machine it says so and offers to fetch one.
+**A way in from Windows.** Add source lists **From another program** at the top: that is a
+cable, and picking one puts a box on the canvas fed by whatever is playing into it. A cable is
+a free driver with two ends. The other program sends to one end, LoopIt7 listens on the other,
+and what arrives is a source like any microphone, ready to patch to as many outputs as you
+like. This is the half a DAW wants: set your output device to **LoopIt7 Cable** and the DAW is
+on the canvas.
 
-A cable LoopIt7 asked you to install gets named after the box, so the name in Discord's list
-is the name on your canvas. A cable that was already here keeps the name it came with: it is
-written down in somebody's OBS scene and their Discord settings, and LoopIt7 has no business
-renaming it. Uninstalling puts back every name it changed.
+The same cable can instead be given to a virtual output, with the link button on the box, if
+you want what arrives to be summed with other programs before it leaves. Either way the picker
+lists the ends as pairs, so nothing is guessed, and if there is no cable on the machine it says
+so and offers to fetch one.
+
+**What it is called.** A cable LoopIt7 installed is named **LoopIt7 Cable** the first time the
+app sees it, without waiting to be asked, because the name is the only handle anybody has on it
+from inside a DAW or Discord. Give it to a virtual output and it takes that box's name instead,
+so the word in Discord's list is the word on your canvas.
+
+A cable that was already here keeps the name it came with. It is written down in somebody's OBS
+scene and their Discord settings, and LoopIt7 has no business renaming it behind their back.
+The Devices page will offer to take one over if you want it to, in as many words and naming the
+device it would change. Uninstalling puts back every name LoopIt7 changed.
 
 A cable has two ends and Windows never says which belongs to which, which is the quietest way
 a routing setup fails. LoopIt7 pairs them for you and says so in plain words: send audio to

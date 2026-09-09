@@ -209,6 +209,175 @@ bool Guard(
         $"{settings.ClaimedCables.Count} claim(s) recorded");
 }
 
+// The name a cable of our own carries before anything on the canvas has a better one. It is
+// what a DAW, Discord and OBS all show in their own output list, so it has to be the same
+// every time and it has to be unambiguous when there are two.
+{
+    var settings = new AppSettings();
+
+    Check("a cable of our own is called LoopIt7 Cable",
+        CableOwnership.DefaultNameFor(settings) == "LoopIt7 Cable",
+        $"got '{CableOwnership.DefaultNameFor(settings)}'");
+
+    settings.ClaimedCables.Add(new CableClaimSettings { ClaimedName = "LoopIt7 Cable" });
+
+    Check("a second one is told apart from the first",
+        CableOwnership.DefaultNameFor(settings) == "LoopIt7 Cable 2",
+        $"got '{CableOwnership.DefaultNameFor(settings)}'");
+
+    var (feed, pickup) = CableOwnership.NamesFor(CableOwnership.DefaultName, "VB-Audio");
+
+    Check("and that is what the other program's list reads",
+        feed.Display == "LoopIt7 Cable (LoopIt7 · VB-Audio)", $"got '{feed.Display}'");
+    Check("with the end we listen on told apart from it",
+        pickup.Display == "LoopIt7 Cable pickup (LoopIt7 · VB-Audio)", $"got '{pickup.Display}'");
+}
+
+// Naming a cable without being asked, and stopping. The first is what makes the way in
+// findable at all; the second is the promise that "give the name back" means permanently.
+{
+    var settings = new AppSettings();
+    CableOwnership.ObserveCables(settings, [cableIn, cableOut], "LoopIt7");
+
+    Check("a cable setup installed is named without waiting to be asked",
+        CableOwnership.MayNameUnasked(settings, cableIn), "it would have been left alone");
+
+    var claim = new CableClaimSettings
+    {
+        RenderEndpointId = cableIn.Id,
+        CaptureEndpointId = cableOut.Id,
+        ClaimedName = "LoopIt7 Cable",
+        OriginalRenderName = "CABLE Input",
+        OriginalRenderInterface = "VB-Audio Virtual Cable",
+        OriginalCaptureName = "CABLE Output",
+        OriginalCaptureInterface = "VB-Audio Virtual Cable"
+    };
+
+    settings.ClaimedCables.Add(claim);
+    CableOwnership.Disown(settings, claim, [], out _);
+
+    Check("giving the name back drops the claim",
+        settings.ClaimedCables.Count == 0, $"{settings.ClaimedCables.Count} left");
+
+    Check("and nothing names it again on the next look",
+        !CableOwnership.MayNameUnasked(settings, cableIn), "it would have been renamed again");
+
+    Check("though the cable is still one LoopIt7 could name if asked",
+        CableOwnership.MayClaim(settings, cableIn), "ownership was thrown away with the name");
+}
+
+// One vendor, several products, and only one of them is a cable. Told apart on the driver
+// string, most specific first, because "VB-Audio" alone covers three unrelated things and
+// pairing a VB-CABLE playback end with a VoiceMeeter recording end fails without a sound.
+{
+    var vbCableIn = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{vb-in}", "CABLE Input", "VB-Audio Virtual Cable",
+        AudioSourceKind.Render, false);
+
+    var vbCableOut = new AudioDeviceInfo(
+        "{0.0.1.00000000}.{vb-out}", "CABLE Output", "VB-Audio Virtual Cable",
+        AudioSourceKind.Capture, false);
+
+    var vaioIn = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{vaio-in}", "VoiceMeeter Input", "VB-Audio VoiceMeeter VAIO",
+        AudioSourceKind.Render, false);
+
+    var vaioOut = new AudioDeviceInfo(
+        "{0.0.1.00000000}.{vaio-out}", "VoiceMeeter Output", "VB-Audio VoiceMeeter VAIO",
+        AudioSourceKind.Capture, false);
+
+    var waveLink = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{wave}", "System", "Elgato Virtual Audio",
+        AudioSourceKind.Render, false);
+
+    Check("VoiceMeeter is not filed under the plain cable",
+        VirtualCableService.FamilyOf(vaioIn) == "VoiceMeeter",
+        $"got '{VirtualCableService.FamilyOf(vaioIn)}'");
+
+    var pickups = VirtualCableService.FindPickupEndpoints(vbCableIn, [vbCableOut, vaioOut]);
+
+    Check("so a cable's recording end is its own and not VoiceMeeter's",
+        pickups.Count == 1 && pickups[0].Id == vbCableOut.Id,
+        $"paired with {string.Join(", ", pickups.Select(p => p.Name))}");
+
+    Check("a cable is a cable",
+        VirtualCableService.IsPlainCable(vbCableIn), "the plain cable was not recognised");
+
+    Check("a program's own virtual device is not one to rename",
+        !VirtualCableService.IsPlainCable(waveLink) && !VirtualCableService.IsPlainCable(vaioIn),
+        "somebody else's product was offered up for renaming");
+}
+
+// A VB-Audio cable, the way in from a DAW, and which end is which. Worth its own check
+// because the vendor's two names read backwards from ours: "CABLE Input" is a playback
+// endpoint, the thing a DAW picks as its output, and "CABLE Output" is the recording endpoint
+// LoopIt7 opens to hear it. Getting these the wrong way round leaves a patch that looks right
+// with meters that never move.
+{
+    var vbInput = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{vb-input}", "CABLE Input", "VB-Audio Virtual Cable",
+        AudioSourceKind.Render, false);
+
+    var vbOutput = new AudioDeviceInfo(
+        "{0.0.1.00000000}.{vb-output}", "CABLE Output", "VB-Audio Virtual Cable",
+        AudioSourceKind.Capture, false);
+
+    var inlets = VirtualCableService.FindInlets([vbInput], [vbOutput]);
+
+    Check("a VB-Audio cable offers one way in", inlets.Count == 1, $"got {inlets.Count}");
+
+    var inlet = inlets[0];
+
+    Check("the DAW is pointed at CABLE Input, which is a playback endpoint",
+        inlet.Feed.Id == vbInput.Id && inlet.Feed.Kind == AudioSourceKind.Render,
+        $"the DAW was sent to {inlet.Feed.Name}");
+
+    Check("and the source box opens CABLE Output, the recording end",
+        inlet.Pickup.Id == vbOutput.Id && inlet.Pickup.Kind == AudioSourceKind.Capture,
+        $"LoopIt7 would open {inlet.Pickup.Name}");
+
+    // What a source box added from that inlet is called: the end the DAW picks, because that
+    // name is the only part of this the user sees anywhere outside LoopIt7.
+    Check("the box on the canvas reads as the end the DAW picks",
+        inlet.Title == "CABLE Input", $"got '{inlet.Title}'");
+
+    var (feed, pickup) = CableOwnership.NamesFor(
+        CableOwnership.DefaultName, VirtualCableService.VendorOf(vbInput));
+
+    Check("once it is ours, that is what the DAW's output list says",
+        feed.Display == "LoopIt7 Cable (LoopIt7 · VB-Audio)", $"got '{feed.Display}'");
+
+    Check("and the end we open is named apart from it",
+        pickup.Display == "LoopIt7 Cable pickup (LoopIt7 · VB-Audio)", $"got '{pickup.Display}'");
+}
+
+// Handing over a cable that was here first. Nothing automatic may do this, which is why the
+// door only opens from the user's side of it.
+{
+    var theirs = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{theirs-render}", "CABLE Input", "VB-Audio Virtual Cable",
+        AudioSourceKind.Render, false);
+
+    var theirsOut = new AudioDeviceInfo(
+        "{0.0.1.00000000}.{theirs-capture}", "CABLE Output", "VB-Audio Virtual Cable",
+        AudioSourceKind.Capture, false);
+
+    var settings = new AppSettings();
+    CableOwnership.ObserveCables(settings, [theirs, theirsOut], null);
+
+    Check("a cable that was here first is still left alone by itself",
+        !CableOwnership.MayNameUnasked(settings, theirs), "it was renamed unasked");
+
+    CableOwnership.Adopt(settings, theirs, theirsOut);
+
+    Check("handing it over makes both ends ours to name",
+        CableOwnership.MayClaim(settings, theirs) && CableOwnership.MayClaim(settings, theirsOut),
+        "one end stayed off limits");
+
+    Check("and it stops counting as somebody else's",
+        settings.ForeignCableIds.Count == 0, $"{settings.ForeignCableIds.Count} still foreign");
+}
+
 // Handing a cable back. The bookkeeping has to hold even when the cable itself has gone,
 // which is exactly the state an uninstall on a changed machine runs in.
 {

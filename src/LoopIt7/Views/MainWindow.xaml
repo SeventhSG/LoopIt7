@@ -33,6 +33,15 @@
             </StackPanel>
         </DataTemplate>
 
+        <!-- A way in from the rest of Windows: what to pick over there, and what we listen on. -->
+        <DataTemplate x:Key="InletMenuRow">
+            <StackPanel>
+                <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Style="{StaticResource Caption}" FontSize="11" Margin="0,2,0,0"
+                           Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+        </DataTemplate>
+
         <DataTemplate x:Key="ApplicationMenuRow">
             <StackPanel>
                 <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
@@ -278,7 +287,44 @@
                     </Border.Effect>
                     <ScrollViewer MaxHeight="430" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
-                            <TextBlock Text="Inputs" Style="{StaticResource Caption}" Margin="10,6,0,4" />
+                            <!--
+                                First, because it is the one thing a device list cannot tell
+                                you: the cable another program plays into to be heard here.
+                            -->
+                            <TextBlock Text="From another program" Style="{StaticResource Caption}" Margin="10,6,0,4" />
+                            <ItemsControl ItemsSource="{Binding CableInlets}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Style="{StaticResource MenuRowButton}"
+                                                Content="{Binding}"
+                                                ContentTemplate="{StaticResource InletMenuRow}"
+                                                Click="OnMenuRowClick"
+                                                Tag="source" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- No cable, no way in. Say so here rather than showing an empty heading. -->
+                            <StackPanel Margin="10,2,10,0">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding CableInlets.Count}" Value="0">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
+                                           Text="Nothing on this machine can send audio to LoopIt7 yet. That needs a virtual cable, which is a signed driver Windows will not let an ordinary program create. VB-Audio's is free." />
+                                <Button Style="{StaticResource GhostButton}" Margin="0,8,0,0"
+                                        HorizontalAlignment="Stretch"
+                                        Click="OnGetCableClick"
+                                        Content="Get a cable" />
+                            </StackPanel>
+
+                            <TextBlock Text="Inputs" Style="{StaticResource Caption}" Margin="10,12,0,4" />
                             <ItemsControl ItemsSource="{Binding CaptureDevices}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>

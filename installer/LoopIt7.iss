@@ -15,6 +15,11 @@
 ; installer\cable\. Shipping it needs a distribution agreement from VB-Audio, so the setup
 ; is written to build and work identically without it: no file, no task, and the app falls
 ; back to sending the user to vb-audio.com itself.
+;
+; Setup installs the driver and nothing else. The renaming happens on the app's first run,
+; from the note this script leaves in installed-cable.txt: the endpoints do not exist until
+; the driver's own installer has finished, and the app is the thing that knows how to put
+; every name back when it is uninstalled.
 #define CableSetup     "cable\VBCABLE_Setup_x64.exe"
 ; The driver string VB-Audio's plain cable reports, and the thing setup looks for. Their
 ; A+B pack and VoiceMeeter's VAIO are different drivers that also say VB-Audio, so this
@@ -76,7 +81,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Offered whenever this exact cable is missing, even on a machine that already has cables of
 ; another make. Those belong to somebody else's setup, and a cable LoopIt7 may not rename is a
 ; cable that cannot carry the user's own name into Discord.
-Name: "cable"; Description: "Install a virtual audio cable, so other programs can send audio to LoopIt7"; GroupDescription: "Virtual audio cable:"; Check: not CableInstalled
+Name: "cable"; Description: "Install a virtual audio cable. LoopIt7 names it ""LoopIt7 Cable"", and that is what you pick in a DAW, Discord or OBS to play into LoopIt7"; GroupDescription: "Virtual audio cable:"; Check: not CableInstalled
 ; A cable LoopIt7 installed is LoopIt7's to keep current. Without this the check above
 ; would see a cable present on every later upgrade and quietly skip it forever.
 Name: "cableupdate"; Description: "Update the virtual audio cable LoopIt7 installed"; GroupDescription: "Virtual audio cable:"; Check: OurCableIsOutOfDate

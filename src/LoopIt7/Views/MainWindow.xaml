@@ -144,13 +144,13 @@
                             <TextBlock Text="Add output" Margin="8,0,0,0" />
                         </StackPanel>
                     </Button>
-                    <Button x:Name="AddVirtualOutputButton" Style="{StaticResource GhostButton}" Margin="6,0,0,0"
-                            Click="OnAddVirtualOutputClick" AutomationProperties.Name="Add virtual output"
-                            ToolTip="A box you name, assign programs to, and fan out to as many outputs as you like">
+                    <Button x:Name="AddCableButton" Style="{StaticResource GhostButton}" Margin="6,0,0,0"
+                            Click="OnAddCableClick" AutomationProperties.Name="Add cable"
+                            ToolTip="A LoopIt7 cable: other programs play into it or record from it by name">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Glyph}" FontSize="11" Text="&#xE8AB;"
                                        Foreground="{StaticResource AccentBrush}" />
-                            <TextBlock Text="Add virtual output" Margin="8,0,0,0" />
+                            <TextBlock Text="Add cable" Margin="8,0,0,0" />
                         </StackPanel>
                     </Button>
                     <Button Style="{StaticResource IconButtonDanger}" Margin="6,0,0,0"
@@ -287,44 +287,8 @@
                     </Border.Effect>
                     <ScrollViewer MaxHeight="430" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
-                            <!--
-                                First, because it is the one thing a device list cannot tell
-                                you: the cable another program plays into to be heard here.
-                            -->
-                            <TextBlock Text="From another program" Style="{StaticResource Caption}" Margin="10,6,0,4" />
-                            <ItemsControl ItemsSource="{Binding CableInlets}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Button Style="{StaticResource MenuRowButton}"
-                                                Content="{Binding}"
-                                                ContentTemplate="{StaticResource InletMenuRow}"
-                                                Click="OnMenuRowClick"
-                                                Tag="source" />
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-
-                            <!-- No cable, no way in. Say so here rather than showing an empty heading. -->
-                            <StackPanel Margin="10,2,10,0">
-                                <StackPanel.Style>
-                                    <Style TargetType="StackPanel">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding CableInlets.Count}" Value="0">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </StackPanel.Style>
-                                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="Nothing on this machine can send audio to LoopIt7 yet. That needs a virtual cable, which is a signed driver Windows will not let an ordinary program create. VB-Audio's is free." />
-                                <Button Style="{StaticResource GhostButton}" Margin="0,8,0,0"
-                                        HorizontalAlignment="Stretch"
-                                        Click="OnGetCableClick"
-                                        Content="Get a cable" />
-                            </StackPanel>
-
-                            <TextBlock Text="Inputs" Style="{StaticResource Caption}" Margin="10,12,0,4" />
+                            <!-- Cables have their own button now; this list is devices and programs. -->
+                            <TextBlock Text="Inputs" Style="{StaticResource Caption}" Margin="10,6,0,4" />
                             <ItemsControl ItemsSource="{Binding CaptureDevices}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -396,36 +360,69 @@
                 </Border>
             </Popup>
 
-            <!-- New virtual output flyout -->
+            <!-- Add cable flyout -->
             <!-- Pulled left: this is the rightmost button, so a flyout hung off its left edge
                  would run past the window. -->
-            <Popup x:Name="AddVirtualOutputPopup" PlacementTarget="{Binding ElementName=AddVirtualOutputButton}"
-                   Placement="Bottom" HorizontalOffset="-160" VerticalOffset="6"
+            <Popup x:Name="AddCablePopup" PlacementTarget="{Binding ElementName=AddCableButton}"
+                   Placement="Bottom" HorizontalOffset="-200" VerticalOffset="6"
                    StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
                 <Border Background="{StaticResource SurfaceHiBrush}" BorderBrush="{StaticResource LineStrongBrush}"
                         BorderThickness="1" CornerRadius="{StaticResource SurfaceRadius}"
-                        Width="320" Padding="14" Margin="12">
+                        Width="380" Padding="8" Margin="12">
                     <Border.Effect>
                         <DropShadowEffect BlurRadius="24" ShadowDepth="6" Direction="270" Color="#000000" Opacity="0.55" />
                     </Border.Effect>
-                    <StackPanel>
-                        <TextBlock Text="New virtual output" Style="{StaticResource SectionLabel}" Margin="0,0,0,8" />
-                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,10"
-                                   Text="Name it after whatever feeds it. Assign programs to it, then run cables from it to every output that should hear them." />
+                    <ScrollViewer MaxHeight="430" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel>
+                            <TextBlock Text="Cables" Style="{StaticResource Caption}" Margin="10,6,0,2" />
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="10,0,10,6"
+                                       Text="In: hear what a program plays into the cable. Out: send a mix into it, for a program that records from it." />
 
-                        <TextBox x:Name="VirtualOutputNameBox" Style="{StaticResource LoopTextBox}"
-                                 Text="{Binding NewVirtualOutputName, UpdateSourceTrigger=PropertyChanged}"
-                                 Tag="Discord"
-                                 KeyDown="OnVirtualOutputNameKeyDown" />
+                            <ItemsControl ItemsSource="{Binding CableInlets}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="10,5,4,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource InletMenuRow}"
+                                                              VerticalAlignment="Center" />
+                                            <Button Grid.Column="1" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                    Content="In" Tag="source" Click="OnCableRowClick"
+                                                    AutomationProperties.Name="Add as a source"
+                                                    ToolTip="A source box: what programs play into this cable" />
+                                            <Button Grid.Column="2" Style="{StaticResource GhostButton}" Margin="6,0,0,0"
+                                                    Content="Out" Tag="destination" Click="OnCableRowClick"
+                                                    AutomationProperties.Name="Add as an output"
+                                                    ToolTip="An output box: programs record what you send here" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
 
-                        <Button Style="{StaticResource GhostButton}" Margin="0,8,0,0"
-                                HorizontalAlignment="Stretch"
-                                Click="OnCreateVirtualOutputClick"
-                                Content="Create it" />
-
-                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,10,0,0"
-                                   Text="It is a box inside LoopIt7, not a Windows device. Other programs cannot select it by name, which is why you assign them to it here." />
-                    </StackPanel>
+                            <!-- No cable yet. Say so rather than showing an empty list. -->
+                            <StackPanel Margin="10,2,10,6">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding CableInlets.Count}" Value="0">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
+                                           Text="No cable on this machine yet. A cable is a signed driver Windows will not let an ordinary program create; the LoopIt7 installer can add one, or get VB-Audio's free one." />
+                                <Button Style="{StaticResource GhostButton}" Margin="0,8,0,0"
+                                        HorizontalAlignment="Stretch"
+                                        Click="OnGetCableClick"
+                                        Content="Get a cable" />
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
                 </Border>
             </Popup>
 

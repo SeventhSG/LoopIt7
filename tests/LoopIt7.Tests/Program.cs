@@ -537,6 +537,27 @@ bool Guard(
 
     Check("without the note the same cable would be left alone",
         !CableOwnership.MayClaim(blind, installed), "it was claimable with no note");
+
+    // The A+B pack is two drivers, and setup notes both. Each is matched in full, so a C+D
+    // pack on the same machine, same vendor and same wording up to the letter, stays theirs.
+    var packB = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{cableb}", "CABLE-B Input", "VB-Audio Cable B",
+        AudioSourceKind.Render, false);
+    var theirCableC = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{cablec}", "CABLE-C Input", "VB-Audio Cable C",
+        AudioSourceKind.Render, false);
+
+    var pack = new AppSettings();
+    CableOwnership.ObserveCables(pack, [theirCableA, packB, theirCableC, installed], "VB-Audio Cable A|VB-Audio Cable B");
+
+    Check("both cables of the A+B pack setup installed are ours",
+        CableOwnership.MayClaim(pack, theirCableA) && CableOwnership.MayClaim(pack, packB), "A or B was not claimable");
+
+    Check("a C+D pack beside it is not",
+        !CableOwnership.MayClaim(pack, theirCableC), "Cable C became claimable");
+
+    Check("nor the plain cable",
+        !CableOwnership.MayClaim(pack, installed), "the plain cable became claimable");
 }
 
 Console.WriteLine();

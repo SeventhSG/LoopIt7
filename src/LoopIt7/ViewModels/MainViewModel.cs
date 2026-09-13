@@ -57,7 +57,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _newPresetName = string.Empty;
     private CableViewModel? _selectedCable;
     private int _liveNodeCount;
-    private string _newVirtualOutputName = string.Empty;
     private PatchPageViewModel? _selectedPage;
 
     /// <summary>The cable carrying LoopIt7's own name, and the one that could be asked to.</summary>
@@ -86,7 +85,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ToggleRoutingCommand = new RelayCommand(_ => ToggleRouting());
         AddSourceCommand = new RelayCommand(AddSourceFromDescriptor);
         AddDestinationCommand = new RelayCommand(AddDestinationFromDescriptor);
-        CreateVirtualOutputCommand = new RelayCommand(_ => CreateVirtualOutput(), _ => CanCreateVirtualOutput);
         RefreshApplicationsCommand = new RelayCommand(_ => RefreshApplications());
         RefreshDevicesCommand = new RelayCommand(_ => { RefreshDevices(); RebuildDeviceRows(); });
         ClearPatchbayCommand = new RelayCommand(_ => ClearPatchbay());
@@ -187,7 +185,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand ToggleRoutingCommand { get; }
     public RelayCommand AddSourceCommand { get; }
     public RelayCommand AddDestinationCommand { get; }
-    public RelayCommand CreateVirtualOutputCommand { get; }
     public RelayCommand RefreshApplicationsCommand { get; }
     public RelayCommand RefreshDevicesCommand { get; }
     public RelayCommand ClearPatchbayCommand { get; }
@@ -255,17 +252,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public bool HasNodes => Sources.Count > 0 || Destinations.Count > 0 || VirtualOutputs.Count > 0;
 
-    /// <summary>Name typed into the new virtual output field.</summary>
-    public string NewVirtualOutputName
-    {
-        get => _newVirtualOutputName;
-        set
-        {
-            if (SetProperty(ref _newVirtualOutputName, value)) OnPropertyChanged(nameof(CanCreateVirtualOutput));
-        }
-    }
-
-    public bool CanCreateVirtualOutput => !string.IsNullOrWhiteSpace(_newVirtualOutputName);
 
     public bool HasVirtualCable => OutputDevices.Any(VirtualCableService.IsVirtual);
 
@@ -751,8 +737,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Creates a virtual output. It is a box inside LoopIt7, not a Windows endpoint: nothing
-    /// else on the machine can select it, and programs reach it by being captured into it.
+    /// Restores a virtual output from a saved page. New ones can no longer be made: cables took
+    /// their place, because a cable is a real Windows device other programs can pick by name.
+    /// Pages saved with one still open with it, so nobody's setup breaks on upgrade.
     /// </summary>
     public VirtualOutputNodeViewModel AddVirtualOutput(string name, NodeSettings? saved = null)
     {
@@ -771,17 +758,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         Finish();
         return vm;
-    }
-
-    private void CreateVirtualOutput()
-    {
-        string name = NewVirtualOutputName.Trim();
-        if (name.Length == 0) return;
-
-        var created = AddVirtualOutput(name);
-        NewVirtualOutputName = string.Empty;
-
-        Notice = $"\"{created.Title}\" is ready. Assign a program to it, then run cables out to every output it should reach.";
     }
 
     /// <summary>

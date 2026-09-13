@@ -12,12 +12,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $driverRoot = Split-Path -Parent $PSScriptRoot
-$output = Join-Path $driverRoot "vendor\audio\sysvad\$Platform\$Configuration"
+$output = Join-Path $driverRoot "vendor\audio\sysvad\TabletAudioSample\$Platform\$Configuration\Package"
 
 if (-not (Test-Path $output)) { throw "Nothing built at $output. Run driver\scripts\build.ps1 first." }
 
-$package = Get-ChildItem $output -Directory | Where-Object { Test-Path (Join-Path $_.FullName '*.inf') } | Select-Object -First 1
-if (-not $package) { $package = Get-Item $output }
+$package = Get-Item $output
 
 $certificate = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -eq $Subject } | Select-Object -First 1
 if (-not $certificate) {

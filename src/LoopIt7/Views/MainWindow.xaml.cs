@@ -221,31 +221,25 @@ public partial class MainWindow : Window
         AddOutputPopup.IsOpen = !AddOutputPopup.IsOpen;
     }
 
-    private void OnAddVirtualOutputClick(object sender, RoutedEventArgs e)
+    private void OnAddCableClick(object sender, RoutedEventArgs e)
     {
         AddSourcePopup.IsOpen = false;
         AddOutputPopup.IsOpen = false;
-        AddVirtualOutputPopup.IsOpen = !AddVirtualOutputPopup.IsOpen;
-
-        if (AddVirtualOutputPopup.IsOpen) VirtualOutputNameBox.Focus();
+        AddCablePopup.IsOpen = !AddCablePopup.IsOpen;
     }
 
-    private void OnVirtualOutputNameKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    /// <summary>
+    /// In puts the cable's recording end on the page as a source; Out puts its playback end
+    /// there as an output. Same cable, the two directions a program can use it in.
+    /// </summary>
+    private void OnCableRowClick(object sender, RoutedEventArgs e)
     {
-        if (e.Key != System.Windows.Input.Key.Enter) return;
+        if (sender is not System.Windows.Controls.Button { DataContext: Audio.CableInlet inlet } button) return;
 
-        CreateVirtualOutput();
-        e.Handled = true;
-    }
+        if ((string?)button.Tag == "destination") _viewModel.AddDestinationCommand.Execute(inlet.Feed);
+        else _viewModel.AddSourceCommand.Execute(inlet);
 
-    private void OnCreateVirtualOutputClick(object sender, RoutedEventArgs e) => CreateVirtualOutput();
-
-    private void CreateVirtualOutput()
-    {
-        if (!_viewModel.CreateVirtualOutputCommand.CanExecute(null)) return;
-
-        _viewModel.CreateVirtualOutputCommand.Execute(null);
-        AddVirtualOutputPopup.IsOpen = false;
+        AddCablePopup.IsOpen = false;
     }
 
     private void OnMenuRowClick(object sender, RoutedEventArgs e)

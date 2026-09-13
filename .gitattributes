@@ -1,0 +1,2 @@
+# The driver patch carries a UTF-16 INF as a binary hunk; line ending conversion would break it.
+driver/patches/*.patch -text

@@ -600,7 +600,7 @@
                            HorizontalAlignment="Center" Margin="0,14,0,0" />
                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextAlignment="Center"
                            Margin="0,8,0,0"
-                           Text="Add a source and an output, then drag a cable between them. Or make a virtual output, assign a program to it, and fan it out to as many outputs as you like." />
+                           Text="Add a source and an output, then drag a cable between them. Add cable puts a LoopIt7 cable on the page, for audio to and from other programs." />
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
                     <Button Style="{StaticResource GhostButton}" Height="36" Padding="16,0"

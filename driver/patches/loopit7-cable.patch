@@ -1,0 +1,2446 @@
+diff --git a/audio/sysvad/EndpointsCommon/CableRing.cpp b/audio/sysvad/EndpointsCommon/CableRing.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..53ae44d281814e7541e20b429cf582273e31f6f4
+--- /dev/null
++++ b/audio/sysvad/EndpointsCommon/CableRing.cpp
+@@ -0,0 +1,363 @@
++/*++
++
++Module Name:
++
++    CableRing.cpp
++
++Abstract:
++
++    LoopIt7 Cable, not part of Microsoft's sample. Implementation of CCableRing; see
++    CableRing.h for what it is for.
++
++    Everything here runs at up to DISPATCH_LEVEL from the stream timers, so the whole file is
++    non-paged and takes a spin lock, never anything that can block or fault.
++
++--*/
++
++#include <sysvad.h>
++#include "CableRing.h"
++
++#define CABLERING_POOLTAG       'gRCL'
++
++#define CABLERING_CAPACITY_MS   500     // how much audio the ring can hold at all
++#define CABLERING_PREROLL_MS    30      // minimum distance a reader keeps behind the writer
++#define CABLERING_MAX_LAG_MS    90      // extra lag tolerated beyond the cushion before resync
++
++#pragma code_seg()
++
++static ULONG AlignDown(_In_ ULONG Value, _In_ ULONG Alignment)
++{
++    return Value - (Value % Alignment);
++}
++
++static ULONG AlignUp(_In_ ULONG Value, _In_ ULONG Alignment)
++{
++    ULONG remainder = Value % Alignment;
++    return remainder == 0 ? Value : Value + (Alignment - remainder);
++}
++
++CCableRing::CCableRing() :
++    m_pBuffer(NULL),
++    m_ulCapacity(0),
++    m_ulBlockAlign(1),
++    m_ulPrerollBytes(0),
++    m_ulMaxLagBytes(0),
++    m_ulMaxWriteChunk(0),
++    m_ullWritePosition(0),
++    m_ullWriterStart(0),
++    m_pActiveWriter(NULL)
++{
++    KeInitializeSpinLock(&m_Lock);
++}
++
++CCableRing::~CCableRing()
++{
++    Free();
++}
++
++_Use_decl_annotations_
++NTSTATUS CCableRing::Allocate(ULONG BytesPerSecond, ULONG BlockAlign)
++{
++    if (BlockAlign == 0 || BytesPerSecond < BlockAlign)
++    {
++        return STATUS_INVALID_PARAMETER;
++    }
++
++    ULONG capacity = AlignDown((ULONG)(((ULONGLONG)BytesPerSecond * CABLERING_CAPACITY_MS) / 1000), BlockAlign);
++    ULONG preroll  = AlignDown((ULONG)(((ULONGLONG)BytesPerSecond * CABLERING_PREROLL_MS)  / 1000), BlockAlign);
++    ULONG maxLag   = AlignDown((ULONG)(((ULONGLONG)BytesPerSecond * CABLERING_MAX_LAG_MS)  / 1000), BlockAlign);
++
++    if (preroll < BlockAlign || maxLag < BlockAlign || capacity <= preroll + maxLag)
++    {
++        return STATUS_INVALID_PARAMETER;
++    }
++
++    // Zero-initialised by ExAllocatePool2, so an early reader hears silence, not garbage.
++    BYTE* buffer = (BYTE*)ExAllocatePool2(POOL_FLAG_NON_PAGED, capacity, CABLERING_POOLTAG);
++    if (buffer == NULL)
++    {
++        return STATUS_INSUFFICIENT_RESOURCES;
++    }
++
++    Free();
++
++    KIRQL oldIrql;
++    KeAcquireSpinLock(&m_Lock, &oldIrql);
++
++    m_pBuffer          = buffer;
++    m_ulCapacity       = capacity;
++    m_ulBlockAlign     = BlockAlign;
++    m_ulPrerollBytes   = preroll;
++    m_ulMaxLagBytes    = maxLag;
++    m_ulMaxWriteChunk  = 0;
++    m_ullWritePosition = 0;
++    m_ullWriterStart   = 0;
++    m_pActiveWriter    = NULL;
++
++    KeReleaseSpinLock(&m_Lock, oldIrql);
++
++    return STATUS_SUCCESS;
++}
++
++_Use_decl_annotations_
++VOID CCableRing::Free()
++{
++    BYTE* buffer;
++
++    KIRQL oldIrql;
++    KeAcquireSpinLock(&m_Lock, &oldIrql);
++
++    buffer          = m_pBuffer;
++    m_pBuffer       = NULL;
++    m_ulCapacity    = 0;
++    m_pActiveWriter = NULL;
++
++    KeReleaseSpinLock(&m_Lock, oldIrql);
++
++    if (buffer != NULL)
++    {
++        ExFreePoolWithTag(buffer, CABLERING_POOLTAG);
++    }
++}
++
++_Use_decl_annotations_
++VOID CCableRing::Write(PVOID Writer, const BYTE* Source, ULONG Bytes, ULONGLONG SourceLinearPosition)
++{
++    if (Writer == NULL || Source == NULL || Bytes == 0)
++    {
++        return;
++    }
++
++    KIRQL oldIrql;
++    KeAcquireSpinLock(&m_Lock, &oldIrql);
++
++    if (m_pBuffer == NULL || m_ulCapacity == 0)
++    {
++        goto Done;
++    }
++
++    if (m_pActiveWriter == NULL)
++    {
++        // A new writer. Start it on a fresh frame boundary, offset so ring position stays
++        // congruent to its linear position; readers rely on that to keep frames aligned.
++        ULONGLONG base = m_ullWritePosition + (m_ulBlockAlign - 1);
++        base -= base % m_ulBlockAlign;
++
++        ULONGLONG start = base + (SourceLinearPosition % m_ulBlockAlign);
++
++        // The few bytes skipped to reach that boundary still hold whatever an earlier writer
++        // left there. Silence them, in case a reader is still draining up to this point.
++        for (ULONGLONG gap = m_ullWritePosition; gap < start; gap++)
++        {
++            m_pBuffer[gap % m_ulCapacity] = 0;
++        }
++
++        m_ullWritePosition = start;
++        m_ullWriterStart   = m_ullWritePosition;
++        m_ulMaxWriteChunk  = 0;
++        m_pActiveWriter    = Writer;
++    }
++    else if (m_pActiveWriter != Writer)
++    {
++        // Somebody else owns the cable. Dropping this is correct: the render filter only
++        // allows one stream, so this is a transition edge, not a second program's audio.
++        goto Done;
++    }
++
++    if (Bytes > m_ulCapacity)
++    {
++        // More than the ring holds arrived at once (a long stall). Keep only the newest.
++        ULONG skip = Bytes - m_ulCapacity;
++        Source             += skip;
++        m_ullWritePosition += skip;
++        Bytes               = m_ulCapacity;
++    }
++
++    if (Bytes > m_ulMaxWriteChunk)
++    {
++        m_ulMaxWriteChunk = min(Bytes, m_ulCapacity / 4);
++    }
++
++    {
++        ULONG offset = (ULONG)(m_ullWritePosition % m_ulCapacity);
++        ULONG first  = min(Bytes, m_ulCapacity - offset);
++
++        RtlCopyMemory(m_pBuffer + offset, Source, first);
++        if (Bytes > first)
++        {
++            RtlCopyMemory(m_pBuffer, Source + first, Bytes - first);
++        }
++
++        m_ullWritePosition += Bytes;
++    }
++
++Done:
++    KeReleaseSpinLock(&m_Lock, oldIrql);
++}
++
++_Use_decl_annotations_
++VOID CCableRing::ReleaseWriter(PVOID Writer)
++{
++    KIRQL oldIrql;
++    KeAcquireSpinLock(&m_Lock, &oldIrql);
++
++    if (m_pActiveWriter == Writer)
++    {
++        m_pActiveWriter = NULL;
++    }
++
++    KeReleaseSpinLock(&m_Lock, oldIrql);
++}
++
++_Use_decl_annotations_
++VOID CCableRing::ResetReader(PCABLE_READER Reader)
++{
++    Reader->Position  = 0;
++    Reader->Cushion   = 0;
++    Reader->Synced    = FALSE;
++    Reader->Refilling = FALSE;
++}
++
++// How far behind the writer a reader should sit: the pre-roll, but at least two of either
++// side's chunks, so a reader pulling 50 ms at a time off a writer pushing 10 ms at a time
++// does not run dry between them. Capped so it always leaves room for the lag allowance.
++// Caller holds m_Lock.
++_Use_decl_annotations_
++ULONG CCableRing::CushionFor(ULONG ReadBytes) const
++{
++    ULONG cushion = m_ulPrerollBytes;
++
++    if (ReadBytes <= m_ulCapacity / 4 && ReadBytes * 2 > cushion)
++    {
++        cushion = ReadBytes * 2;
++    }
++    if (m_ulMaxWriteChunk * 2 > cushion)
++    {
++        cushion = m_ulMaxWriteChunk * 2;
++    }
++
++    cushion = AlignUp(cushion, m_ulBlockAlign);
++
++    ULONG ceiling = AlignDown(m_ulCapacity - m_ulMaxLagBytes, m_ulBlockAlign);
++    return min(cushion, ceiling);
++}
++
++_Use_decl_annotations_
++VOID CCableRing::Read(PCABLE_READER Reader, BYTE* Destination, ULONG Bytes, ULONGLONG DestinationLinearPosition)
++{
++    if (Destination == NULL || Bytes == 0)
++    {
++        return;
++    }
++
++    ULONG delivered = 0;
++
++    if (Reader != NULL)
++    {
++        KIRQL oldIrql;
++        KeAcquireSpinLock(&m_Lock, &oldIrql);
++
++        if (m_pBuffer != NULL && m_ulCapacity != 0)
++        {
++            ULONGLONG writePosition = m_ullWritePosition;
++
++            if (Reader->Synced)
++            {
++                ULONGLONG position = Reader->Position;
++
++                if (position > writePosition ||
++                    writePosition - position > m_ulCapacity ||
++                    writePosition - position > (ULONGLONG)Reader->Cushion + m_ulMaxLagBytes)
++                {
++                    // Drifted too far behind, or the data it wanted has been overwritten.
++                    // Jumping ahead to a fresh lock never replays anything it already heard.
++                    Reader->Synced = FALSE;
++                }
++                else if (Reader->Refilling)
++                {
++                    if (position < m_ullWriterStart)
++                    {
++                        // A new writer started while we waited; lock on to it afresh
++                        // rather than play the old writer's leftover tail.
++                        Reader->Synced = FALSE;
++                    }
++                    else
++                    {
++                        ULONG cushion = CushionFor(Bytes);
++                        if (cushion > Reader->Cushion)
++                        {
++                            Reader->Cushion = cushion;
++                        }
++                        if (writePosition - position >= Reader->Cushion)
++                        {
++                            // The underrun delivered a partial chunk, so this reader's position
++                            // may no longer sit on the same sample boundary as its destination.
++                            // Skip the remainder of a frame (always less than one) to restore it.
++                            ULONG realign = (ULONG)(((DestinationLinearPosition % m_ulBlockAlign) +
++                                                     m_ulBlockAlign - (position % m_ulBlockAlign)) %
++                                                    m_ulBlockAlign);
++
++                            Reader->Position  = position + realign;
++                            Reader->Refilling = FALSE;
++                        }
++                    }
++                }
++            }
++
++            if (!Reader->Synced && m_pActiveWriter != NULL)
++            {
++                ULONG cushion = CushionFor(Bytes);
++
++                // Only lock on once the current writer has produced a full cushion, so the
++                // reader never reaches back into audio from before this writer started.
++                if (writePosition >= m_ullWriterStart &&
++                    writePosition - m_ullWriterStart >= (ULONGLONG)cushion + m_ulBlockAlign)
++                {
++                    ULONGLONG target = writePosition - cushion;
++                    target -= target % m_ulBlockAlign;
++                    target += DestinationLinearPosition % m_ulBlockAlign;
++
++                    Reader->Position  = target;
++                    Reader->Cushion   = cushion;
++                    Reader->Synced    = TRUE;
++                    Reader->Refilling = FALSE;
++                }
++            }
++
++            if (Reader->Synced && !Reader->Refilling)
++            {
++                ULONGLONG available = writePosition - Reader->Position;
++                ULONG     take      = (available >= Bytes) ? Bytes : (ULONG)available;
++
++                if (take > 0)
++                {
++                    ULONG offset = (ULONG)(Reader->Position % m_ulCapacity);
++                    ULONG first  = min(take, m_ulCapacity - offset);
++
++                    RtlCopyMemory(Destination, m_pBuffer + offset, first);
++                    if (take > first)
++                    {
++                        RtlCopyMemory(Destination + first, m_pBuffer, take - first);
++                    }
++
++                    Reader->Position += take;
++                    delivered = take;
++                }
++
++                if (take < Bytes)
++                {
++                    // Ran dry. Pad with silence and wait for the cushion to rebuild, instead of
++                    // resyncing backwards and replaying audio this reader already delivered.
++                    Reader->Refilling = TRUE;
++                }
++            }
++        }
++
++        KeReleaseSpinLock(&m_Lock, oldIrql);
++    }
++
++    if (delivered < Bytes)
++    {
++        RtlZeroMemory(Destination + delivered, Bytes - delivered);
++    }
++}
+diff --git a/audio/sysvad/EndpointsCommon/CableRing.h b/audio/sysvad/EndpointsCommon/CableRing.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b4f7147bf50c4512c01729b93be768e953e5c82
+--- /dev/null
++++ b/audio/sysvad/EndpointsCommon/CableRing.h
+@@ -0,0 +1,99 @@
++/*++
++
++Module Name:
++
++    CableRing.h
++
++Abstract:
++
++    LoopIt7 Cable, not part of Microsoft's sample. The buffer that turns the driver's one
++    playback endpoint and one recording endpoint into a cable: whatever a program plays into
++    "Cable In" comes out of "Cable Out".
++
++    One writer, any number of readers. Only one render stream can exist (the cable's render
++    filter allows a single pin instance and a single processing mode, see
++    TabletAudioSample\cablespeakerwavtable.h), and the ring enforces that as well: the first
++    stream to write owns it until it leaves RUN. Readers each keep their own cursor in a
++    CABLE_READER, so two programs recording the cable (Windows can open one capture stream
++    per processing mode) both hear everything instead of splitting the audio between them.
++
++    Both sides are clocked by their own stream timer, the same way every stream in this
++    driver is. A reader sits a fixed pre-roll behind the writer to absorb timer jitter;
++    if it drifts too far either way it resyncs rather than growing latency or handing out
++    stale audio, and it never locks on to data written before the current writer started.
++
++    All positions are absolute byte counts. The ring keeps ring position congruent to the
++    writer's own linear position modulo the block alignment, and readers resync so their
++    position is congruent to their own, which keeps sample frames lined up across the two
++    independent streams.
++
++    Every method may be called at IRQL <= DISPATCH_LEVEL and lives in non-paged code
++    (CableRing.cpp).
++
++--*/
++
++#ifndef _LOOPIT7_CABLERING_H_
++#define _LOOPIT7_CABLERING_H_
++
++typedef struct _CABLE_READER
++{
++    ULONGLONG   Position;   // absolute ring position of the next byte this reader delivers
++    ULONG       Cushion;    // how far behind the writer this reader aims to sit, in bytes
++    BOOLEAN     Synced;     // locked on to the current writer
++    BOOLEAN     Refilling;  // underran; delivering silence until the cushion is back
++} CABLE_READER, *PCABLE_READER;
++
++class CCableRing
++{
++public:
++    CCableRing();
++    ~CCableRing();
++
++    _IRQL_requires_(PASSIVE_LEVEL)
++    NTSTATUS Allocate(_In_ ULONG BytesPerSecond, _In_ ULONG BlockAlign);
++
++    _IRQL_requires_max_(DISPATCH_LEVEL)
++    VOID Free();
++
++    _IRQL_requires_max_(DISPATCH_LEVEL)
++    VOID Write
++    (
++        _In_                    PVOID       Writer,
++        _In_reads_bytes_(Bytes) const BYTE* Source,
++        _In_                    ULONG       Bytes,
++        _In_                    ULONGLONG   SourceLinearPosition
++    );
++
++    _IRQL_requires_max_(DISPATCH_LEVEL)
++    VOID ReleaseWriter(_In_ PVOID Writer);
++
++    _IRQL_requires_max_(DISPATCH_LEVEL)
++    static VOID ResetReader(_Out_ PCABLE_READER Reader);
++
++    _IRQL_requires_max_(DISPATCH_LEVEL)
++    VOID Read
++    (
++        _Inout_                     PCABLE_READER   Reader,
++        _Out_writes_bytes_(Bytes)   BYTE*           Destination,
++        _In_                        ULONG           Bytes,
++        _In_                        ULONGLONG       DestinationLinearPosition
++    );
++
++private:
++    KSPIN_LOCK  m_Lock;
++    BYTE*       m_pBuffer;
++    ULONG       m_ulCapacity;
++    ULONG       m_ulBlockAlign;
++    ULONG       m_ulPrerollBytes;
++    ULONG       m_ulMaxLagBytes;
++    ULONG       m_ulMaxWriteChunk;
++    ULONGLONG   m_ullWritePosition;
++    ULONGLONG   m_ullWriterStart;
++    PVOID       m_pActiveWriter;
++
++    ULONG CushionFor(_In_ ULONG ReadBytes) const;
++};
++
++typedef CCableRing *PCCableRing;
++
++#endif // _LOOPIT7_CABLERING_H_
+diff --git a/audio/sysvad/EndpointsCommon/EndpointsCommon.vcxproj b/audio/sysvad/EndpointsCommon/EndpointsCommon.vcxproj
+index c1ba8b14fecc295d0b2cac8cde1772ccb2efd1d8..d1760688ea1d473b7dd995496aaac172853c7205 100644
+--- a/audio/sysvad/EndpointsCommon/EndpointsCommon.vcxproj
++++ b/audio/sysvad/EndpointsCommon/EndpointsCommon.vcxproj
+@@ -177,6 +177,7 @@
+     <ClCompile Include="a2dphpspeakertopo.cpp" />
+     <ClCompile Include="a2dphptopo.cpp" />
+     <ClCompile Include="AudioModuleHelper.cpp" />
++    <ClCompile Include="CableRing.cpp" />
+     <ClCompile Include="bthhfpmictopo.cpp" />
+     <ClCompile Include="bthhfpminwavert.cpp" />
+     <ClCompile Include="bthhfpspeakertopo.cpp" />
+diff --git a/audio/sysvad/EndpointsCommon/minwavertstream.cpp b/audio/sysvad/EndpointsCommon/minwavertstream.cpp
+index adea0c824c0830fd213fd2f7061160e7f111c556..88ae57c71cb5b7452feedc4b9aada173b7f926b3 100644
+--- a/audio/sysvad/EndpointsCommon/minwavertstream.cpp
++++ b/audio/sysvad/EndpointsCommon/minwavertstream.cpp
+@@ -35,6 +35,14 @@ Return Value:
+ --*/
+ {
+     PAGED_CODE();
++
++    // LoopIt7 Cable: a render stream torn down while it still owned the cable must hand it
++    // back, or no later stream could ever write to it again.
++    if (m_bCableWriter && m_pCableRing != NULL)
++    {
++        m_pCableRing->ReleaseWriter(this);
++    }
++
+     if (NULL != m_pMiniport)
+     {
+         if (m_pAudioModules)
+@@ -250,6 +258,11 @@ Return Value:
+     m_pAudioModules = NULL;
+     m_AudioModuleCount = 0;
+ 
++    m_pCableRing = NULL;
++    m_bCableWriter = FALSE;
++    m_bCableReader = FALSE;
++    CCableRing::ResetReader(&m_CableReader);
++
+     m_ulHostCaptureToneFrequency = IsEqualGUID(SignalProcessingMode, AUDIO_SIGNALPROCESSINGMODE_RAW) ? 1000 : 2000;
+     m_ulLoopbackCaptureToneFrequency = 3000; // 3 kHz
+     m_dwHostCaptureToneAmplitude = 50; 
+@@ -302,6 +315,23 @@ Return Value:
+     m_bCapture = Capture_;
+     m_ulDmaMovementRate = pWfEx->nAvgBytesPerSec;
+ 
++    //
++    // LoopIt7 Cable: decide this stream's part in the cable now, at PASSIVE_LEVEL.
++    //
++    {
++        PADAPTERCOMMON pAdapterComm = m_pMiniport->GetAdapterCommObj();
++        if (pAdapterComm != NULL)
++        {
++            m_pCableRing = pAdapterComm->GetCableRing();
++        }
++
++        if (m_pCableRing != NULL)
++        {
++            m_bCableWriter = !m_bCapture && m_pMiniport->IsSystemRenderPin(Pin_);
++            m_bCableReader =  m_bCapture && m_pMiniport->IsSystemCapturePin(Pin_);
++        }
++    }
++
+     m_pDpc = (PRKDPC)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KDPC), MINWAVERTSTREAM_POOLTAG);
+     if (!m_pDpc)
+     {
+@@ -1335,6 +1365,13 @@ NTSTATUS CMiniportWaveRTStream::SetState
+             }
+ #endif // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
+ 
++            // LoopIt7 Cable: every run starts a reader from scratch. Not yet RUN, and the
++            // timer is not armed, so nothing else touches the reader state here.
++            if (m_bCableReader)
++            {
++                CCableRing::ResetReader(&m_CableReader);
++            }
++
+             // Start DMA
+             LARGE_INTEGER ullPerfCounterTemp;
+             if (m_pMiniport->IsKeywordDetectorPin(m_ulPin))
+@@ -1365,6 +1402,16 @@ NTSTATUS CMiniportWaveRTStream::SetState
+ 
+     m_KsState = State_;
+ 
++    // LoopIt7 Cable: a render stream that stops running gives the cable up. Taken under the
++    // position lock so an UpdatePosition already in flight finishes first, and any later one
++    // sees the new state and does not reclaim it.
++    if (m_bCableWriter && State_ != KSSTATE_RUN)
++    {
++        KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
++        m_pCableRing->ReleaseWriter(this);
++        KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
++    }
++
+ #if defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
+ Done:
+ #endif  // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
+@@ -1401,7 +1448,15 @@ VOID CMiniportWaveRTStream::UpdatePosition
+ {
+     // Convert ticks to 100ns units.
+     LONGLONG  hnsCurrentTime = KSCONVERT_PERFORMANCE_TIME(m_ullPerformanceCounterFrequency.QuadPart, ilQPC);
+-    
++
++    // LoopIt7 Cable: everything below divides by the buffer size. PortCls allocates the buffer
++    // before RUN, but a divide by zero here is a bugcheck, so refuse rather than trust it.
++    if (m_ulDmaBufferSize == 0 || m_ulDmaMovementRate == 0)
++    {
++        m_ullDmaTimeStamp = hnsCurrentTime;
++        return;
++    }
++
+     // Calculate the time elapsed since the last call to GetPosition() or since the
+     // DMA engine started.  Note that the division by 10000 to convert to milliseconds
+     // may cause us to lose some of the time, so we will carry the remainder forward 
+@@ -1474,6 +1529,12 @@ VOID CMiniportWaveRTStream::UpdatePosition
+             // Read from buffer and write to a file.
+             ReadBytes(ByteDisplacement);
+         }
++
++        // LoopIt7 Cable: hand the region just played to the cable. Separate from ReadBytes
++        // above on purpose: that is the sample's save-to-file debug path, only initialised
++        // when g_DoNotCreateDataFiles is cleared, and calling it regardless is what crashed
++        // this driver (bugcheck 0xD1 in CSaveData::WriteData).
++        PushToCable(ByteDisplacement);
+     }
+     
+     // Increment the DMA position by the number of bytes displaced since the last
+@@ -1502,22 +1563,80 @@ VOID CMiniportWaveRTStream::WriteBytes
+ 
+ Routine Description:
+ 
+-This function writes the audio buffer using a sine wave generator
++LoopIt7 Cable: fills the capture buffer. The cable's recording stream reads from the ring
++with its own cursor; any other capture stream gets silence rather than the sample's test
++tone. CCableRing::Read pads with silence itself when it has nothing to give.
++
+ Arguments:
+ 
+ ByteDisplacement - # of bytes to process.
+ 
+ --*/
+ {
+-    ULONG bufferOffset = m_ullLinearPosition % m_ulDmaBufferSize;
++    if (m_pDmaBuffer == NULL || m_ulDmaBufferSize == 0)
++    {
++        return;
++    }
++
++    ULONG     bufferOffset   = (ULONG)(m_ullLinearPosition % m_ulDmaBufferSize);
++    ULONGLONG linearPosition = m_ullLinearPosition;
+ 
+     // Normally this will loop no more than once for a single wrap, but if
+     // many bytes have been displaced then this may loops many times.
+     while (ByteDisplacement > 0)
+     {
+         ULONG runWrite = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
+-            m_ToneGenerator.GenerateSine(m_pDmaBuffer + bufferOffset, runWrite);
++
++        if (m_bCableReader)
++        {
++            m_pCableRing->Read(&m_CableReader, m_pDmaBuffer + bufferOffset, runWrite, linearPosition);
++        }
++        else
++        {
++            RtlZeroMemory(m_pDmaBuffer + bufferOffset, runWrite);
++        }
++
++        bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
++        linearPosition += runWrite;
++        ByteDisplacement -= runWrite;
++    }
++}
++
++//=============================================================================
++#pragma code_seg()
++VOID CMiniportWaveRTStream::PushToCable
++(
++    _In_ ULONG ByteDisplacement
++)
++/*++
++
++Routine Description:
++
++LoopIt7 Cable: copies the region of the render buffer that has just been played into the
++cable's ring. Only the cable's system render stream does this.
++
++Arguments:
++
++ByteDisplacement - # of bytes to process.
++
++--*/
++{
++    if (!m_bCableWriter || m_pDmaBuffer == NULL || m_ulDmaBufferSize == 0)
++    {
++        return;
++    }
++
++    ULONG     bufferOffset   = (ULONG)(m_ullLinearPosition % m_ulDmaBufferSize);
++    ULONGLONG linearPosition = m_ullLinearPosition;
++
++    while (ByteDisplacement > 0)
++    {
++        ULONG runWrite = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
++
++        m_pCableRing->Write(this, m_pDmaBuffer + bufferOffset, runWrite, linearPosition);
++
+         bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
++        linearPosition += runWrite;
+         ByteDisplacement -= runWrite;
+     }
+ }
+diff --git a/audio/sysvad/EndpointsCommon/minwavertstream.h b/audio/sysvad/EndpointsCommon/minwavertstream.h
+index 4e9e882c041914d890e22b85c2fa61f2c8e99704..19c1d3a83f9119cd1d0702766299a35da7dfa8ee 100644
+--- a/audio/sysvad/EndpointsCommon/minwavertstream.h
++++ b/audio/sysvad/EndpointsCommon/minwavertstream.h
+@@ -145,6 +145,14 @@ protected:
+     BOOL                        m_SidebandStarted;
+ #endif  // defined(SYSVAD_BTH_BYPASS) || defined(SYSVAD_USB_SIDEBAND)
+ 
++    // LoopIt7 Cable. Resolved once in Init at PASSIVE_LEVEL so the timer path never has to
++    // look anything up: a system render stream feeds the ring, a system capture stream
++    // reads it with its own cursor, anything else takes no part.
++    PCCableRing                 m_pCableRing;
++    CABLE_READER                m_CableReader;
++    BOOLEAN                     m_bCableWriter;
++    BOOLEAN                     m_bCableReader;
++
+ public:
+     
+     NTSTATUS GetVolumeChannelCount
+@@ -290,6 +298,11 @@ private:
+     (
+         _In_ ULONG ByteDisplacement
+     );
++
++    VOID PushToCable
++    (
++        _In_ ULONG ByteDisplacement
++    );
+     
+     VOID UpdatePosition
+     (
+diff --git a/audio/sysvad/EndpointsCommon/speakertoptable.h b/audio/sysvad/EndpointsCommon/speakertoptable.h
+index ea3890f7c6af69d3d83923cf8bc699173bbca34d..8e454986168fc17bb43a39bfcb30e0a735d7d88a 100644
+--- a/audio/sysvad/EndpointsCommon/speakertoptable.h
++++ b/audio/sysvad/EndpointsCommon/speakertoptable.h
+@@ -15,6 +15,13 @@ Abstract:
+ #ifndef _SYSVAD_SPEAKERTOPTABLE_H_
+ #define _SYSVAD_SPEAKERTOPTABLE_H_
+ 
++//
++// LoopIt7 Cable: names the playback endpoint "Cable In" instead of the generic "Speakers".
++// The string itself is in the INF, under MediaCategories, keyed by this GUID.
++// {9f8da4bf-c4c1-4b12-938c-54e5de7031f4}
++DEFINE_GUID(CABLE_IN_CUSTOM_NAME,
++0x9f8da4bf, 0xc4c1, 0x4b12, 0x93, 0x8c, 0x54, 0xe5, 0xde, 0x70, 0x31, 0xf4);
++
+ //=============================================================================
+ static
+ KSDATARANGE SpeakerTopoPinDataRangesBridge[] =
+@@ -77,7 +84,7 @@ PCPIN_DESCRIPTOR SpeakerTopoMiniportPins[] =
+       KSPIN_DATAFLOW_OUT,                               // DataFlow
+       KSPIN_COMMUNICATION_NONE,                         // Communication
+       &KSNODETYPE_SPEAKER,                              // Category
+-      NULL,                                             // Name
++      &CABLE_IN_CUSTOM_NAME,                            // Name
+       0                                                 // Reserved
+     }
+   }
+diff --git a/audio/sysvad/TabletAudioSample/ComponentizedAudioSample.inx b/audio/sysvad/TabletAudioSample/ComponentizedAudioSample.inx
+index c6655868b940071c1814cfaf23c1f266578038b8..835c3e9221476289d59ce0c6ddffd9229264bea5 100644
+--- a/audio/sysvad/TabletAudioSample/ComponentizedAudioSample.inx
++++ b/audio/sysvad/TabletAudioSample/ComponentizedAudioSample.inx
+@@ -1,622 +1,177 @@
++;
++; LoopIt7 Cable
++;
++; A virtual audio cable: whatever plays into "Cable In" comes out of "Cable Out".
++; Built on the Microsoft SysVAD sample (MIT). This INF describes only the cable's two
++; endpoints; the sample's other simulated hardware is compiled out of the driver's
++; endpoint tables and has no entries here.
++;
++; No FX (effects) registration: a cable carries audio untouched.
++; No [SignatureAttributes] DRM level: this driver forwards everything played into it, so it
++; must never be treated as a trusted path for protected content.
++;
++
+ [Version]
+ Signature   = "$Windows NT$"
+ Class       = MEDIA
+-Provider    = %ProviderName%
+ ClassGUID   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+-DriverVer   = 02/22/2016, 1.0.0.1
+-CatalogFile = sysvad.cat
++Provider    = %ProviderName%
++DriverVer   = 01/01/2026, 1.0.0.0
++CatalogFile = loopit7cable.cat
+ PnpLockDown = 1
+ 
+ [SourceDisksNames]
+-222="SYSVAD Driver Disk","",222
++222 = %DiskName%,"",222
+ 
+ [SourceDisksFiles]
+-tabletaudiosample.sys=222
+-keywordDetectorContosoAdapter.dll=222
+-
+-[SignatureAttributes]
+-tabletaudiosample.sys=SignatureAttributes.DRM
+-keyworddetectorcontosoadapter.dll=SignatureAttributes.PETrust
+-
+-[SignatureAttributes.DRM]
+-DRMLevel=1300
+-
+-[SignatureAttributes.PETrust]
+-PETrust=true
++loopit7cable.sys = 222
+ 
+ [Manufacturer]
+-%MfgName%=SYSVAD,NT$ARCH$.10.0...22621
++%MfgName% = LoopIt7Cable,NT$ARCH$.10.0...22621
+ 
+-[SYSVAD.NT$ARCH$.10.0...22621]
+-%SYSVAD_SA.DeviceDesc%=SYSVAD_SA, Root\sysvad_ComponentizedAudioSample
++[LoopIt7Cable.NT$ARCH$.10.0...22621]
++%LoopIt7Cable.DeviceDesc% = LoopIt7Cable_Device, Root\LoopIt7Cable
+ 
+ [DestinationDirs]
+-SYSVAD_SA.CopyList=13 ; 13=Package's DriverStore directory
+-KEYWORDDETECTORCONTOSOADAPTER.CopyList=13 ;
++LoopIt7Cable.CopyList = 13 ; the package's own driver store directory
++
++[LoopIt7Cable.CopyList]
++loopit7cable.sys
+ 
+ ;======================================================
+-; SYSVAD_SA
++; Device
+ ;======================================================
+-[SYSVAD_SA.CopyList]
+-tabletaudiosample.sys
+-
+-[KEYWORDDETECTORCONTOSOADAPTER.CopyList]
+-keyworddetectorcontosoadapter.dll
++[LoopIt7Cable_Device.NT]
++Include   = ks.inf, wdmaudio.inf
++Needs     = KS.Registration, WDMAUDIO.Registration
++CopyFiles = LoopIt7Cable.CopyList
++AddReg    = LoopIt7Cable.AddReg
+ 
+-[SYSVAD_SA.AddReg]
+-HKR,,AssociatedFilters,,"wdmaud,swmidi,redbook"
+-HKR,,Driver,,tabletaudiosample.sys
+-
+-;
+-; For demo only, please review these power management settings for your architecture. 
+-;
+-HKR,PowerSettings,SingleComponentMultiFxStates,3,1,0,0,0  ; Turn on multi Fx support.
+-HKR,PowerSettings,ConservationIdleTime,3,3,0,0,0          ; 3 seconds for idle power management when on battery
+-HKR,PowerSettings,PerformanceIdleTime,3,3,0,0,0           ; 3 seconds for idle power management when on AC power
+-HKR,PowerSettings,IdlePowerState,3,3,0,0,0                ; go to D3 for idle power management
+-
+-HKR,Drivers,SubClasses,,"wave,midi,mixer"
++[LoopIt7Cable.AddReg]
++HKR,,AssociatedFilters,,"wdmaud"
++HKR,,Driver,,loopit7cable.sys
+ 
++HKR,Drivers,SubClasses,,"wave,mixer"
+ HKR,Drivers\wave\wdmaud.drv,Driver,,wdmaud.drv
+-HKR,Drivers\midi\wdmaud.drv,Driver,,wdmaud.drv
+ HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
++HKR,Drivers\wave\wdmaud.drv,Description,,%LoopIt7Cable.DeviceDesc%
++HKR,Drivers\mixer\wdmaud.drv,Description,,%LoopIt7Cable.DeviceDesc%
+ 
+-HKR,Drivers\wave\wdmaud.drv,Description,,%SYSVAD_SA.DeviceDesc%
+-HKR,Drivers\midi\wdmaud.drv,Description,,%SYSVAD_MIDI%
+-HKR,Drivers\mixer\wdmaud.drv,Description,,%SYSVAD_SA.DeviceDesc%
+-
+-HKR,%MEDIA_CATEGORIES%\%MicArray1CustomNameGUID%,Name,,%MicArray1CustomName%
+-HKR,%MEDIA_CATEGORIES%\%MicArray2CustomNameGUID%,Name,,%MicArray2CustomName%
+-HKR,%MEDIA_CATEGORIES%\%MicArray3CustomNameGUID%,Name,,%MicArray3CustomName%
+-HKR,%MEDIA_CATEGORIES%\%MicInCustomNameGUID%,Name,,%MicInCustomName%
+-
+-
+-[KEYWORDDETECTORCONTOSOADAPTER.AddReg]
+-HKCR,CLSID\%KEYWORDDETECTORCONTOSOADAPTER_CLSID%,,,"KeywordDetectorContosoAdapter Class"
+-HKCR,CLSID\%KEYWORDDETECTORCONTOSOADAPTER_CLSID%\InProcServer32,,0x00020000,%13%\keyworddetectorcontosoadapter.dll
+-HKCR,CLSID\%KEYWORDDETECTORCONTOSOADAPTER_CLSID%\InProcServer32,ThreadingModel,,"Apartment"
+-HKCR,CLSID\%KEYWORDDETECTORCONTOSOADAPTER_CLSID%\Version,,,"1.0"
+-
+-HKCR,CLSID\%KEYWORDDETECTORCONTOSOADAPTER_CLSID2%,,,"KeywordDetectorContosoAdapter2 Class"
+-HKCR,CLSID\%KEYWORDDETECTORCONTOSOADAPTER_CLSID2%\InProcServer32,,0x00020000,%13%\keyworddetectorcontosoadapter.dll
+-HKCR,CLSID\%KEYWORDDETECTORCONTOSOADAPTER_CLSID2%\InProcServer32,ThreadingModel,,"Apartment"
+-HKCR,CLSID\%KEYWORDDETECTORCONTOSOADAPTER_CLSID2%\Version,,,"1.0"
+-
+-;======================================================
+-; render interfaces: speaker (internal)
+-;======================================================
+-[SYSVAD.I.WaveSpeaker]
+-AddReg=SYSVAD.I.WaveSpeaker.AddReg
+-
+-[SYSVAD.I.WaveSpeaker.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.WaveSpeaker.szPname%
+-
+-[SYSVAD.I.TopologySpeaker]
+-AddReg=SYSVAD.I.TopologySpeaker.AddReg
+-
+-[SYSVAD.I.TopologySpeaker.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.TopologySpeaker.szPname%
++; Endpoint names, keyed by the pin name GUIDs in speakertoptable.h and micintoptable.h.
++HKR,%MEDIA_CATEGORIES%\%CableInNameGUID%,Name,,%CableInName%
++HKR,%MEDIA_CATEGORIES%\%CableOutNameGUID%,Name,,%CableOutName%
+ 
+-HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0\%CAPXSAMPLEAPOMFX_PROPERTYSTORE_CONTEXT%,%PKEY_FX_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0\%CAPXSAMPLEAPOSFX_PROPERTYSTORE_CONTEXT%,%PKEY_FX_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0\%CAPXSAMPLEAPOSFX_PROPERTYSTORE_CONTEXT%\User,%PKEY_Endpoint_Enable_Channel_Swap_SFX%,0x00010001,0x0
++[LoopIt7Cable_Device.NT.Interfaces]
++; "Cable In": the playback endpoint programs send audio to.
++AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_WaveSpeaker%,     LoopIt7Cable.I.WaveCableIn
++AddInterface = %KSCATEGORY_RENDER%,   %KSNAME_WaveSpeaker%,     LoopIt7Cable.I.WaveCableIn
++AddInterface = %KSCATEGORY_REALTIME%, %KSNAME_WaveSpeaker%,     LoopIt7Cable.I.WaveCableIn
++AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_TopologySpeaker%, LoopIt7Cable.I.TopologyCableIn
++AddInterface = %KSCATEGORY_TOPOLOGY%, %KSNAME_TopologySpeaker%, LoopIt7Cable.I.TopologyCableIn
+ 
+-; The following lines opt-in to pull mode.
+-HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
++; "Cable Out": the recording endpoint that carries it back out.
++AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_WaveMicIn%,       LoopIt7Cable.I.WaveCableOut
++AddInterface = %KSCATEGORY_REALTIME%, %KSNAME_WaveMicIn%,       LoopIt7Cable.I.WaveCableOut
++AddInterface = %KSCATEGORY_CAPTURE%,  %KSNAME_WaveMicIn%,       LoopIt7Cable.I.WaveCableOut
++AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_TopologyMicIn%,   LoopIt7Cable.I.TopologyCableOut
++AddInterface = %KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyMicIn%,   LoopIt7Cable.I.TopologyCableOut
+ 
+-;======================================================
+-; render interfaces: HDMI (external)
+-;======================================================
+-[SYSVAD.I.WaveHdmi]
+-AddReg=SYSVAD.I.WaveHdmi.AddReg
+-[SYSVAD.I.WaveHdmi.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.WaveHdmi.szPname%
++[LoopIt7Cable.I.WaveCableIn]
++AddReg = LoopIt7Cable.I.WaveCableIn.AddReg
+ 
+-[SYSVAD.I.TopologyHdmi]
+-AddReg=SYSVAD.I.TopologyHdmi.AddReg
+-[SYSVAD.I.TopologyHdmi.AddReg]
++[LoopIt7Cable.I.WaveCableIn.AddReg]
+ HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.TopologyHdmi.szPname%
+-; The following lines opt-in to pull mode.
+-HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+-HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
++HKR,,FriendlyName,,%LoopIt7Cable.FilterName%
+ 
+-;======================================================
+-; render interfaces: SPDIF (external)
+-;======================================================
+-[SYSVAD.I.WaveSpdif]
+-AddReg=SYSVAD.I.WaveSpdif.AddReg
+-[SYSVAD.I.WaveSpdif.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.WaveSpdif.szPname%
++[LoopIt7Cable.I.TopologyCableIn]
++AddReg = LoopIt7Cable.I.TopologyCableIn.AddReg
+ 
+-[SYSVAD.I.TopologySpdif]
+-AddReg=SYSVAD.I.TopologySpdif.AddReg
+-[SYSVAD.I.TopologySpdif.AddReg]
++[LoopIt7Cable.I.TopologyCableIn.AddReg]
+ HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.TopologySpdif.szPname%
+-; The following lines opt-in to pull mode.
++HKR,,FriendlyName,,%LoopIt7Cable.FilterName%
+ HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+ HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+ 
+-;======================================================
+-; render interfaces: speaker (external: headphone)
+-;======================================================
+-[SYSVAD.I.WaveSpeakerHeadphone]
+-AddReg=SYSVAD.I.WaveSpeakerHeadphone.AddReg
+-[SYSVAD.I.WaveSpeakerHeadphone.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.WaveSpeakerHeadphone.szPname%
++[LoopIt7Cable.I.WaveCableOut]
++AddReg = LoopIt7Cable.I.WaveCableOut.AddReg
+ 
+-[SYSVAD.I.TopologySpeakerHeadphone]
+-AddReg=SYSVAD.I.TopologySpeakerHeadphone.AddReg
+-[SYSVAD.I.TopologySpeakerHeadphone.AddReg]
++[LoopIt7Cable.I.WaveCableOut.AddReg]
+ HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.TopologySpeakerHeadphone.szPname%
+-; The following lines opt-in to pull mode.
+-HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+-HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
++HKR,,FriendlyName,,%LoopIt7Cable.FilterName%
+ 
+-;======================================================
+-; capture interfaces: mic in (external: headphone)
+-;======================================================
+-[SYSVAD.I.WaveMicIn]
+-AddReg=SYSVAD.I.WaveMicIn.AddReg
+-[SYSVAD.I.WaveMicIn.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.WaveMicIn.szPname%
++[LoopIt7Cable.I.TopologyCableOut]
++AddReg = LoopIt7Cable.I.TopologyCableOut.AddReg
+ 
+-[SYSVAD.I.TopologyMicIn]
+-AddReg=SYSVAD.I.TopologyMicIn.AddReg
+-[SYSVAD.I.TopologyMicIn.AddReg]
++[LoopIt7Cable.I.TopologyCableOut.AddReg]
+ HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.TopologyMicIn.szPname%
+-; The following lines opt-in to pull mode.
++HKR,,FriendlyName,,%LoopIt7Cable.FilterName%
+ HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+ HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+ 
+ ;======================================================
+-; capture interfaces: mic array (internal: front)
++; Service
+ ;======================================================
+-[SYSVAD.I.WaveMicArray1]
+-AddReg=SYSVAD.I.WaveMicArray1.AddReg
+-[SYSVAD.I.WaveMicArray1.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.WaveMicArray1.szPname%
++[LoopIt7Cable_Device.NT.Services]
++AddService = LoopIt7Cable,0x00000002,LoopIt7Cable.Service
+ 
+-[SYSVAD.I.TopologyMicArray1]
+-AddReg=SYSVAD.I.TopologyMicArray1.AddReg,MsApoFxProxyEFX.I.Association0.AddReg
++[LoopIt7Cable.Service]
++DisplayName   = %LoopIt7Cable.SvcDesc%
++ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
++StartType     = 3 ; SERVICE_DEMAND_START
++ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
++ServiceBinary = %13%\loopit7cable.sys
+ 
+-[SYSVAD.I.TopologyMicArray1.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.TopologyMicArray1.szPname%
+-
+-HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0\%CAPXSAMPLEAPOMFX_PROPERTYSTORE_CONTEXT%,%PKEY_FX_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0\%CAPXSAMPLEAPOSFX_PROPERTYSTORE_CONTEXT%,%PKEY_FX_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0\%CAPXSAMPLEAPOSFX_PROPERTYSTORE_CONTEXT%\User,%PKEY_Endpoint_Enable_Channel_Swap_SFX%,0x00010001,0x0
+-
+-; The following lines opt-in to pull mode.
+-HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+-
+-; The following line overrides the default volume (in dB) for an endpoint.
+-; It is only applicable when hardware volume is not implemented.
+-; Float value expressed in fixed point 16.16 format and stored as a DWORD.
+-; 10 dB
+-;HKR,EP\0,%PKEY_AudioEndpoint_Default_VolumeInDb%,0x00010001,0xA0000
+-;-10 dB
+-;HKR,EP\0,%PKEY_AudioEndpoint_Default_VolumeInDb%,0x00010001,0xFFF60000
+-
+-;======================================================
+-; capture interfaces: mic array (internal: back)
+-;======================================================
+-[SYSVAD.I.WaveMicArray2]
+-AddReg=SYSVAD.I.WaveMicArray2.AddReg
+-[SYSVAD.I.WaveMicArray2.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.WaveMicArray2.szPname%
+-
+-[SYSVAD.I.TopologyMicArray2]
+-AddReg=SYSVAD.I.TopologyMicArray2.AddReg
+-
+-[SYSVAD.I.TopologyMicArray2.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.TopologyMicArray2.szPname%
+-
+-HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0\%CAPXSAMPLEAPOMFX_PROPERTYSTORE_CONTEXT%,%PKEY_FX_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0\%CAPXSAMPLEAPOSFX_PROPERTYSTORE_CONTEXT%,%PKEY_FX_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0\%CAPXSAMPLEAPOSFX_PROPERTYSTORE_CONTEXT%\User,%PKEY_Endpoint_Enable_Channel_Swap_SFX%,0x00010001,0x0
+-
+-; The following lines opt-in to pull mode.
+-HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+-
+-;======================================================
+-; capture interfaces: mic array (internal: combined: front/back)
+-;======================================================
+-[SYSVAD.I.WaveMicArray3]
+-AddReg=SYSVAD.I.WaveMicArray3.AddReg
+-[SYSVAD.I.WaveMicArray3.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.WaveMicArray3.szPname%
+-
+-[SYSVAD.I.TopologyMicArray3]
+-AddReg=SYSVAD.I.TopologyMicArray3.AddReg
+-
+-[SYSVAD.I.TopologyMicArray3.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.TopologyMicArray3.szPname%
+-
+-HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0\%CAPXSAMPLEAPOMFX_PROPERTYSTORE_CONTEXT%,%PKEY_FX_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0\%CAPXSAMPLEAPOSFX_PROPERTYSTORE_CONTEXT%,%PKEY_FX_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0\%CAPXSAMPLEAPOSFX_PROPERTYSTORE_CONTEXT%\User,%PKEY_Endpoint_Enable_Channel_Swap_SFX%,0x00010001,0x0
+-
+-; The following lines opt-in to pull mode.
+-HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+-
+-;======================================================
+-; render interfaces: Bluetooth HFP speaker (external)
+-;======================================================
+-[SYSVAD.I.WaveBthHfpSpeaker]
+-AddReg=SYSVAD.I.WaveBthHfpSpeaker.AddReg
+-[SYSVAD.I.WaveBthHfpSpeaker.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.WaveBthHfpSpeaker.szPname%
+-
+-[SYSVAD.I.TopologyBthHfpSpeaker]
+-AddReg=SYSVAD.I.TopologyBthHfpSpeaker.AddReg
+-[SYSVAD.I.TopologyBthHfpSpeaker.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.TopologyBthHfpSpeaker.szPname%
+-; The following lines opt-in to pull mode.
+-HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+-HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+-
+-;======================================================
+-; capture interfaces: Bluetooth HFP mic (external)
+-;======================================================
+-[SYSVAD.I.WaveBthHfpMic]
+-AddReg=SYSVAD.I.WaveBthHfpMic.AddReg
+-[SYSVAD.I.WaveBthHfpMic.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.WaveBthHfpMic.szPname%
+-
+-[SYSVAD.I.TopologyBthHfpMic]
+-AddReg=SYSVAD.I.TopologyBthHfpMic.AddReg,MsApoFxProxy.I.Association0.AddReg
+-[SYSVAD.I.TopologyBthHfpMic.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.TopologyBthHfpMic.szPname%
+-; The following lines opt-in to pull mode.
+-HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+-HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+-
+-;======================================================
+-; render interfaces: USB Headset speaker (external)
+-;======================================================
+-[SYSVAD.I.WaveUsbHsSpeaker]
+-AddReg=SYSVAD.I.WaveUsbHsSpeaker.AddReg
+-[SYSVAD.I.WaveUsbHsSpeaker.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.WaveUsbHsSpeaker.szPname%
++[LoopIt7Cable_Device.NT.HW]
++AddReg = LoopIt7Cable.HW.AddReg
+ 
+-[SYSVAD.I.TopologyUsbHsSpeaker]
+-AddReg=SYSVAD.I.TopologyUsbHsSpeaker.AddReg
+-[SYSVAD.I.TopologyUsbHsSpeaker.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.TopologyUsbHsSpeaker.szPname%
+-; The following lines opt-in to pull mode.
+-HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+-HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+-
+-;======================================================
+-; capture interfaces: USB Headset mic (external)
+-;======================================================
+-[SYSVAD.I.WaveUsbHsMic]
+-AddReg=SYSVAD.I.WaveUsbHsMic.AddReg
+-[SYSVAD.I.WaveUsbHsMic.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.WaveUsbHsMic.szPname%
+-
+-[SYSVAD.I.TopologyUsbHsMic]
+-AddReg=SYSVAD.I.TopologyUsbHsMic.AddReg,MsApoFxProxy.I.Association0.AddReg
+-[SYSVAD.I.TopologyUsbHsMic.AddReg]
+-HKR,,CLSID,,%Proxy.CLSID%
+-HKR,,FriendlyName,,%SYSVAD.TopologyUsbHsMic.szPname%
+-; The following lines opt-in to pull mode.
+-HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+-HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+-
+-;======================================================
+-; MsApoFxProxy APO registry
+-;======================================================
+-[MsApoFxProxy.I.Association0.AddReg]
+-HKR,FX\0,%PKEY_FX_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0,%PKEY_FX_EndpointEffectClsid%,,%FX_DISCOVER_EFFECTS_APO_CLSID%
+-
+-[MsApoFxProxyEFX.I.Association0.AddReg]
+-HKR,FX\0,%PKEY_FX_Association%,,%KSNODETYPE_ANY%
+-HKR,FX\0,%PKEY_FX_KeywordDetector_ModeEffectClsid%,,%FX_DISCOVER_EFFECTS_APO_CLSID%
+-
+-;======================================================
+-; SYSVAD_SA
+-;======================================================
+-[SYSVAD_SA.NT]
+-Include=ks.inf,wdmaudio.inf
+-Needs=KS.Registration, WDMAUDIO.Registration
+-CopyFiles=SYSVAD_SA.CopyList,KEYWORDDETECTORCONTOSOADAPTER.CopyList
+-AddReg=SYSVAD_SA.AddReg,KEYWORDDETECTORCONTOSOADAPTER.AddReg
+-
+-[SYSVAD_SA.NT.Interfaces]
+-;
+-; Interfaces for speaker (internal) render endpoint.
+-;
+-AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_WaveSpeaker%, SYSVAD.I.WaveSpeaker
+-AddInterface=%KSCATEGORY_RENDER%, %KSNAME_WaveSpeaker%, SYSVAD.I.WaveSpeaker
+-AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveSpeaker%, SYSVAD.I.WaveSpeaker
+-AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_TopologySpeaker%, SYSVAD.I.TopologySpeaker
+-AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologySpeaker%, SYSVAD.I.TopologySpeaker
+-
+-;
+-; Interfaces for speaker (external: headphone) render endpoint.
+-;
+-AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_WaveSpeakerHeadphone%, SYSVAD.I.WaveSpeakerHeadphone
+-AddInterface=%KSCATEGORY_RENDER%, %KSNAME_WaveSpeakerHeadphone%, SYSVAD.I.WaveSpeakerHeadphone
+-AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveSpeakerHeadphone%, SYSVAD.I.WaveSpeakerHeadphone
+-AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_TopologySpeakerHeadphone%, SYSVAD.I.TopologySpeakerHeadphone
+-AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologySpeakerHeadphone%, SYSVAD.I.TopologySpeakerHeadphone
+-
+-;
+-; Interfaces for HDMI (external) render endpoint.
+-;
+-AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_WaveHdmi%, SYSVAD.I.WaveHdmi
+-AddInterface=%KSCATEGORY_RENDER%, %KSNAME_WaveHdmi%, SYSVAD.I.WaveHdmi
+-AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveHdmi%, SYSVAD.I.WaveHdmi
+-AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_TopologyHdmi%, SYSVAD.I.TopologyHdmi
+-AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyHdmi%, SYSVAD.I.TopologyHdmi
+-
+-;
+-; Interfaces for SPDIF (external) render endpoint.
+-;
+-AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_WaveSpdif%, SYSVAD.I.WaveSpdif
+-AddInterface=%KSCATEGORY_RENDER%, %KSNAME_WaveSpdif%, SYSVAD.I.WaveSpdif
+-AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveSpdif%, SYSVAD.I.WaveSpdif
+-AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_TopologySpdif%, SYSVAD.I.TopologySpdif
+-AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologySpdif%, SYSVAD.I.TopologySpdif
+-
+-;
+-; Interfaces for microphone (external: headphone) capture endpoint 
+-;
+-AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_WaveMicIn%, SYSVAD.I.WaveMicIn
+-AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveMicIn%, SYSVAD.I.WaveMicIn
+-AddInterface=%KSCATEGORY_CAPTURE%,  %KSNAME_WaveMicIn%, SYSVAD.I.WaveMicIn
+-AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_TopologyMicIn%, SYSVAD.I.TopologyMicIn
+-AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyMicIn%, SYSVAD.I.TopologyMicIn
+-
+-;
+-; Interfaces for microphone array 1 (internal: front) capture endpoint.
+-;
+-AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_WaveMicArray1%, SYSVAD.I.WaveMicArray1
+-AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveMicArray1%, SYSVAD.I.WaveMicArray1
+-AddInterface=%KSCATEGORY_CAPTURE%,  %KSNAME_WaveMicArray1%, SYSVAD.I.WaveMicArray1
+-AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_TopologyMicArray1%, SYSVAD.I.TopologyMicArray1
+-AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyMicArray1%, SYSVAD.I.TopologyMicArray1
+-
+-;
+-; Interfaces for microphone array 2 (internal: back) capture endpoint.
+-;
+-AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_WaveMicArray2%, SYSVAD.I.WaveMicArray2
+-AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveMicArray2%, SYSVAD.I.WaveMicArray2
+-AddInterface=%KSCATEGORY_CAPTURE%,  %KSNAME_WaveMicArray2%, SYSVAD.I.WaveMicArray2
+-AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_TopologyMicArray2%, SYSVAD.I.TopologyMicArray2
+-AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyMicArray2%, SYSVAD.I.TopologyMicArray2
+-
+-;
+-; Interfaces for microphone array 3 (internal: combined: front/back) capture endpoint.
+-;
+-AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_WaveMicArray3%, SYSVAD.I.WaveMicArray3
+-AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveMicArray3%, SYSVAD.I.WaveMicArray3
+-AddInterface=%KSCATEGORY_CAPTURE%,  %KSNAME_WaveMicArray3%, SYSVAD.I.WaveMicArray3
+-AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_TopologyMicArray3%, SYSVAD.I.TopologyMicArray3
+-AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyMicArray3%, SYSVAD.I.TopologyMicArray3
+-
+-;
+-; Interfaces for Bluetooth HFP speaker (external) render endpoint.
+-;
+-AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_WaveBthHfpSpeaker%, SYSVAD.I.WaveBthHfpSpeaker
+-AddInterface=%KSCATEGORY_RENDER%, %KSNAME_WaveBthHfpSpeaker%, SYSVAD.I.WaveBthHfpSpeaker
+-AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveBthHfpSpeaker%, SYSVAD.I.WaveBthHfpSpeaker
+-AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_TopologyBthHfpSpeaker%, SYSVAD.I.TopologyBthHfpSpeaker
+-AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyBthHfpSpeaker%, SYSVAD.I.TopologyBthHfpSpeaker
+-
+-;
+-; Interfaces for Bluetooth HFP mic (external) capture endpoint 
+-;
+-AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_WaveBthHfpMic%, SYSVAD.I.WaveBthHfpMic
+-AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveBthHfpMic%, SYSVAD.I.WaveBthHfpMic
+-AddInterface=%KSCATEGORY_CAPTURE%,  %KSNAME_WaveBthHfpMic%, SYSVAD.I.WaveBthHfpMic
+-AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_TopologyBthHfpMic%, SYSVAD.I.TopologyBthHfpMic
+-AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyBthHfpMic%, SYSVAD.I.TopologyBthHfpMic
+-
+-;
+-; Interfaces for USB Headset speaker (external) render endpoint.
+-;
+-AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_WaveUsbHsSpeaker%, SYSVAD.I.WaveUsbHsSpeaker
+-AddInterface=%KSCATEGORY_RENDER%, %KSNAME_WaveUsbHsSpeaker%, SYSVAD.I.WaveUsbHsSpeaker
+-AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveUsbHsSpeaker%, SYSVAD.I.WaveUsbHsSpeaker
+-AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_TopologyUsbHsSpeaker%, SYSVAD.I.TopologyUsbHsSpeaker
+-AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyUsbHsSpeaker%, SYSVAD.I.TopologyUsbHsSpeaker
+-
+-;
+-; Interfaces for USB Headset mic (external) capture endpoint 
+-;
+-AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_WaveUsbHsMic%, SYSVAD.I.WaveUsbHsMic
+-AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveUsbHsMic%, SYSVAD.I.WaveUsbHsMic
+-AddInterface=%KSCATEGORY_CAPTURE%,  %KSNAME_WaveUsbHsMic%, SYSVAD.I.WaveUsbHsMic
+-AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_TopologyUsbHsMic%, SYSVAD.I.TopologyUsbHsMic
+-AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyUsbHsMic%, SYSVAD.I.TopologyUsbHsMic
+-
+-[SYSVAD_SA.NT.Services]
+-AddService=sysvad_componentizedaudiosample,0x00000002,sysvad_ComponentizedAudioSample_Service_Inst
+-
+-[sysvad_ComponentizedAudioSample_Service_Inst]
+-DisplayName=%SYSVAD_ComponentizedAudioSample.SvcDesc%
+-ServiceType=1
+-StartType=3
+-ErrorControl=1
+-ServiceBinary=%13%\tabletaudiosample.sys
+-
+-[SYSVAD_SA.NT.HW]
+-AddReg = AUDIOHW.AddReg
+-
+-[AUDIOHW.AddReg]
++[LoopIt7Cable.HW.AddReg]
+ ; FILE_DEVICE_SOUND
+ HKR,,DeviceType,0x10001,0x0000001D
+-; SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX
++; SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX, as for any audio device
+ HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GRGWGX;;;BA)(A;;GRGWGX;;;WD)(A;;GRGWGX;;;RC)"
+ 
+-
+ ;======================================================
+ ; WDF
+ ;======================================================
+-[SYSVAD_SA.NT.Wdf]
+-KmdfService = sysvad_componentizedaudiosample, SYSVAD_SA_WdfSect
+-[SYSVAD_SA_WdfSect]
++[LoopIt7Cable_Device.NT.Wdf]
++KmdfService = LoopIt7Cable, LoopIt7Cable.WdfSect
++
++[LoopIt7Cable.WdfSect]
+ KmdfLibraryVersion = $KMDFVERSION$
+ 
+ ;======================================================
+-; COMMON
++; Strings
+ ;======================================================
+ [Strings]
+ 
+-;Non-localizable
+-
+-KSNAME_WaveSpeaker="WaveSpeaker"
+-KSNAME_TopologySpeaker="TopologySpeaker"
+-
+-
+-KSNAME_WaveSpeakerHeadphone="WaveSpeakerHeadphone"
+-KSNAME_TopologySpeakerHeadphone="TopologySpeakerHeadphone"
+-
+-KSNAME_WaveHdmi="WaveHdmi"
+-KSNAME_TopologyHdmi= "TopologyHdmi"
+-
+-KSNAME_WaveSpdif="WaveSpdif"
+-KSNAME_TopologySpdif= "TopologySpdif"
+-
+-KSNAME_WaveMicIn="WaveMicIn"
+-KSNAME_TopologyMicIn="TopologyMicIn"
+-
+-KSNAME_WaveMicArray1="WaveMicArray1"
+-KSNAME_TopologyMicArray1="TopologyMicArray1"
+-
+-KSNAME_WaveMicArray2="WaveMicArray2"
+-KSNAME_TopologyMicArray2="TopologyMicArray2"
+-
+-KSNAME_WaveMicArray3="WaveMicArray3"
+-KSNAME_TopologyMicArray3="TopologyMicArray3"
+-
+-KSNAME_WaveBthHfpSpeaker="WaveBthHfpSpeaker"
+-KSNAME_TopologyBthHfpSpeaker="TopologyBthHfpSpeaker"
+-
+-KSNAME_WaveBthHfpMic="WaveBthHfpMic"
+-KSNAME_TopologyBthHfpMic="TopologyBthHfpMic"
+-
+-KSNAME_WaveUsbHsSpeaker="WaveUsbHsSpeaker"
+-KSNAME_TopologyUsbHsSpeaker="TopologyUsbHsSpeaker"
+-
+-KSNAME_WaveUsbHsMic="WaveUsbHsMic"
+-KSNAME_TopologyUsbHsMic="TopologyUsbHsMic"
+-
+-Proxy.CLSID="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+-KSCATEGORY_AUDIO="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+-KSCATEGORY_RENDER="{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+-KSCATEGORY_CAPTURE="{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+-KSCATEGORY_REALTIME ="{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
++; Non-localizable. The KSNAME values must match the filter names in
++; TabletAudioSample\minipairs.h.
++KSNAME_WaveSpeaker     = "WaveSpeaker"
++KSNAME_TopologySpeaker = "TopologySpeaker"
++KSNAME_WaveMicIn       = "WaveMicIn"
++KSNAME_TopologyMicIn   = "TopologyMicIn"
++
++Proxy.CLSID         = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
++KSCATEGORY_AUDIO    = "{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
++KSCATEGORY_RENDER   = "{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
++KSCATEGORY_CAPTURE  = "{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
++KSCATEGORY_REALTIME = "{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
+ KSCATEGORY_TOPOLOGY = "{DDA54A40-1E4C-11D1-A050-405705C10000}"
+-
+-KSNODETYPE_ANY   = "{00000000-0000-0000-0000-000000000000}"
++KSNODETYPE_ANY      = "{00000000-0000-0000-0000-000000000000}"
+ 
+ PKEY_AudioEndpoint_Association               = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},2"
+ PKEY_AudioEndpoint_Supports_EventDriven_Mode = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},7"
+-;PKEY_AudioEndpoint_Default_VolumeInDb        = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},9"
+-
+-PKEY_FX_Association         = "{D04E05A6-594B-4FB6-A80D-01AF5EED7D1D},0"
+-PKEY_FX_EndpointEffectClsid = "{D04E05A6-594B-4fb6-A80D-01AF5EED7D1D},7"
+-PKEY_FX_KeywordDetector_ModeEffectClsid = "{D04E05A6-594B-4fb6-A80D-01AF5EED7D1D},9"
+-PKEY_Endpoint_Enable_Channel_Swap_SFX = "{A44531EF-5377-4944-AE15-53789A9629C7},2"
+-
+-CAPXSAMPLEAPOMFX_PROPERTYSTORE_CONTEXT = "{5DB5B4C8-6C37-450E-93F5-1E275AFDF87F}"
+-CAPXSAMPLEAPOSFX_PROPERTYSTORE_CONTEXT = "{99817AE5-E6DC-4074-B513-8A872178DA12}"
+-
+-; Driver developers would replace these CLSIDs with those of their own APOs
+-FX_DISCOVER_EFFECTS_APO_CLSID  = "{889C03C8-ABAD-4004-BF0A-BC7BB825E166}"
+-
+ 
+ MEDIA_CATEGORIES = "MediaCategories"
+-MicArray1CustomNameGUID = {6ae81ff4-203e-4fe1-88aa-f2d57775cd4a}
+-MicArray2CustomNameGUID = {3fe0e3e1-ad16-4772-8382-4129169018ce}
+-MicArray3CustomNameGUID = {c04bdb7c-2138-48da-9dd4-2af9ff2e58c2}
+-MicInCustomNameGUID = {d48deb08-fd1c-4d1e-b821-9064d49ae96e}
+-
+-; Driver developers would replace this CLSID with their own keyword detector OEM adapter
+-KEYWORDDETECTORCONTOSOADAPTER_CLSID = {6F7DBCC1-202E-498D-99C5-61C36C4EB2DC}
+-KEYWORDDETECTORCONTOSOADAPTER_CLSID2 = {207F3D0C-5C79-496F-A94C-D3D2934DBFA9}
+-
+-;Localizable
+-
+-ProviderName = "TODO-Set-Provider"
+-MfgName      = "TODO-Set-Manufacturer"
+-MsCopyRight  = "TODO-Set-Copyright"
+-
+-
+-SYSVAD_SA.DeviceDesc="Virtual Audio Device (WDM) - Tablet Sample"
+-SYSVAD_ComponentizedAudioSample.SvcDesc="Virtual Audio Device (WDM) - Tablet Sample Driver"
+-SYSVAD_MIDI="Virtual Audio Device (WDM) - Midi Device"
+-
+-;; friendly names
+-SYSVAD.WaveSpeaker.szPname="SYSVAD Wave Speaker"
+-SYSVAD.TopologySpeaker.szPname="SYSVAD Topology Speaker"
+-
+-SYSVAD.WaveSpeakerHeadphone.szPname="SYSVAD Wave Speaker Headphone"
+-SYSVAD.TopologySpeakerHeadphone.szPname="SYSVAD Topology Speaker Headphone"
+-
+-SYSVAD.WaveHdmi.szPname="SYSVAD Wave HDMI"
+-SYSVAD.TopologyHdmi.szPname="SYSVAD Topology HDMI"
+-
+-SYSVAD.WaveSpdif.szPname="SYSVAD Wave SPDIF"
+-SYSVAD.TopologySpdif.szPname="SYSVAD Topology SPDIF"
+-
+-SYSVAD.WaveMicIn.szPname="SYSVAD Wave Microphone Headphone"
+-SYSVAD.TopologyMicIn.szPname="SYSVAD Topology Microphone Headphone"
+-
+-SYSVAD.WaveMicArray1.szPname="SYSVAD Wave Microphone Array - Front"
+-SYSVAD.TopologyMicArray1.szPname="SYSVAD Topology Microphone Array - Front"
+-
+-SYSVAD.WaveMicArray2.szPname="SYSVAD Wave Microphone Array - Rear"
+-SYSVAD.TopologyMicArray2.szPname="SYSVAD Topology Microphone Array - Rear"
+-
+-SYSVAD.WaveMicArray3.szPname="SYSVAD Wave Microphone Array - Front/Rear"
+-SYSVAD.TopologyMicArray3.szPname="SYSVAD Topology Microphone Array - Front/Rear"
+-
+-SYSVAD.WaveBthHfpSpeaker.szPname="SYSVAD Wave Bluetooth HFP Speaker"
+-SYSVAD.TopologyBthHfpSpeaker.szPname="SYSVAD Topology Bluetooth HFP Speaker"
+-
+-SYSVAD.WaveBthHfpMic.szPname="SYSVAD Wave Bluetooth HFP Microphone"
+-SYSVAD.TopologyBthHfpMic.szPname="SYSVAD Topology Bluetooth HFP Microphone"
+-
+-SYSVAD.WaveUsbHsSpeaker.szPname="SYSVAD Wave USB Headset Speaker"
+-SYSVAD.TopologyUsbHsSpeaker.szPname="SYSVAD Topology USB Headset Speaker"
+-
+-SYSVAD.WaveUsbHsMic.szPname="SYSVAD Wave USB Headset Microphone"
+-SYSVAD.TopologyUsbHsMic.szPname="SYSVAD Topology USB Headset Microphone"
+-
+-MicArray1CustomName= "Internal Microphone Array - Front"
+-MicArray2CustomName= "Internal Microphone Array - Rear"
+-MicArray3CustomName= "Internal Microphone Array - Front/Rear"
+-MicInCustomName= "External Microphone Headphone"
+-
++CableInNameGUID  = {9f8da4bf-c4c1-4b12-938c-54e5de7031f4}
++CableOutNameGUID = {d48deb08-fd1c-4d1e-b821-9064d49ae96e}
++
++; Localizable
++ProviderName              = "SeventhSG"
++MfgName                   = "SeventhSG"
++DiskName                  = "LoopIt7 Cable installation disk"
++LoopIt7Cable.DeviceDesc   = "LoopIt7 Cable"
++LoopIt7Cable.SvcDesc      = "LoopIt7 Cable virtual audio driver"
++LoopIt7Cable.FilterName   = "LoopIt7 Cable"
++CableInName               = "Cable In"
++CableOutName              = "Cable Out"
+diff --git a/audio/sysvad/TabletAudioSample/TabletAudioSample.rc b/audio/sysvad/TabletAudioSample/TabletAudioSample.rc
+index 3ab06ea6f516f5fbdf883d28d3d472be9b3ed4a5..ed7311404216fb0146375e8622b6c336675296cd 100644
+--- a/audio/sysvad/TabletAudioSample/TabletAudioSample.rc
++++ b/audio/sysvad/TabletAudioSample/TabletAudioSample.rc
+@@ -15,14 +15,27 @@ Abstract:
+ 
+ #include <ntverp.h>
+ 
++// LoopIt7 Cable: its own identity, not the sample's. ntverp.h sets Microsoft's company and
++// product names and the OS version; those describe Windows, not this driver.
++#undef  VER_COMPANYNAME_STR
++#undef  VER_PRODUCTNAME_STR
++#undef  VER_PRODUCTVERSION
++#undef  VER_PRODUCTVERSION_STR
++#define VER_COMPANYNAME_STR         "SeventhSG"
++#define VER_PRODUCTNAME_STR         "LoopIt7"
++#define VER_PRODUCTVERSION          1,0,0,0
++#define VER_PRODUCTVERSION_STR      "1.0.0.0"
++#define VER_FILEVERSION             1,0,0,0
++#define VER_FILEVERSION_STR         "1.0.0.0"
++
+ #define VER_FILETYPE                VFT_DRV
+ #define VER_FILESUBTYPE             VFT2_DRV_SOUND
+-#define VER_FILEDESCRIPTION_STR     "Microsoft Virtual Audio Tablet Sample Driver"
+-#define VER_INTERNALNAME_STR        "TabletAudioSample.sys"
+-#define VER_ORIGINALFILENAME_STR    "TabletAudioSample.sys"
++#define VER_FILEDESCRIPTION_STR     "LoopIt7 Cable virtual audio driver"
++#define VER_INTERNALNAME_STR        "LoopIt7Cable.sys"
++#define VER_ORIGINALFILENAME_STR    "LoopIt7Cable.sys"
+ 
+-#define VER_LEGALCOPYRIGHT_YEARS    "2013"
+-#define VER_LEGALCOPYRIGHT_STR	    "Copyright (C) Microsoft Corp." VER_LEGALCOPYRIGHT_YEARS
++#define VER_LEGALCOPYRIGHT_YEARS    "2026"
++#define VER_LEGALCOPYRIGHT_STR      "Copyright (C) SeventhSG " VER_LEGALCOPYRIGHT_YEARS ". Based on the Microsoft SysVAD sample (MIT)."
+ 
+ #include "common.ver"
+ 
+diff --git a/audio/sysvad/TabletAudioSample/TabletAudioSample.vcxproj b/audio/sysvad/TabletAudioSample/TabletAudioSample.vcxproj
+index a37a16b150b1e6bf84f8a2130ae19566b82ab73c..4a0cd79b3d56db18ab163aa2c87744d8b11a72c0 100644
+--- a/audio/sysvad/TabletAudioSample/TabletAudioSample.vcxproj
++++ b/audio/sysvad/TabletAudioSample/TabletAudioSample.vcxproj
+@@ -171,16 +171,16 @@
+     </Midl>
+   </ItemDefinitionGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+-    <TargetName>TabletAudioSample</TargetName>
++    <TargetName>LoopIt7Cable</TargetName>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
+-    <TargetName>TabletAudioSample</TargetName>
++    <TargetName>LoopIt7Cable</TargetName>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+-    <TargetName>TabletAudioSample</TargetName>
++    <TargetName>LoopIt7Cable</TargetName>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
+-    <TargetName>TabletAudioSample</TargetName>
++    <TargetName>LoopIt7Cable</TargetName>
+   </PropertyGroup>
+   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+     <Link>
+@@ -311,4 +311,18 @@
+     <ClInclude Exclude="@(ClInclude)" Include="*.h;*.hpp;*.hxx;*.hm;*.inl;*.xsd" />
+   </ItemGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
++  <!-- LoopIt7 Cable: this dev machine's WDK install is missing InfVerif.dll (a native
++       dependency of the WDK's own InfVerif MSBuild task, not part of the Visual Studio side
++       of the toolchain and not fixed by any component this repo's driver\scripts install), so
++       the target fails to even load rather than reporting a real INF finding. The .sys itself
++       builds and signs fine without it. Overriding the target body to a no-op skips just the
++       crashing task for local dev builds, in this one project; a full INF verification pass
++       still belongs before ever submitting for Microsoft attestation signing, on a machine
++       where the tool is present.
++
++       AfterTargets/BeforeTargets are repeated from the original target on purpose: they are
++       what schedules InfVerif into an ordinary Build at all, and StampInf (which produces the
++       actual .inf files) only runs because its own BeforeTargets="InfVerif" rides on that same
++       scheduling. Dropping these two attributes here once silently disabled both. -->
++  <Target Name="InfVerif" AfterTargets="StampInf" BeforeTargets="PreBuildEvent" />
+ </Project>
+\ No newline at end of file
+diff --git a/audio/sysvad/TabletAudioSample/cablespeakerwavtable.h b/audio/sysvad/TabletAudioSample/cablespeakerwavtable.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..1585c381a6bf997c34a7cba2bc32aad0a6c2ae8d
+--- /dev/null
++++ b/audio/sysvad/TabletAudioSample/cablespeakerwavtable.h
+@@ -0,0 +1,264 @@
++/*++
++
++Module Name:
++
++    cablespeakerwavtable.h
++
++Abstract:
++
++    LoopIt7 Cable, not part of Microsoft's sample. The wave filter behind "Cable In", the
++    playback end of the cable.
++
++    Deliberately smaller than the sample's speaker filter, which it replaces:
++
++    - One system pin instance and no offload pin, so exactly one render stream can exist.
++      The sample's speaker is offload-capable, which lets Windows open several render
++      streams at once, and every one of them would write into the cable.
++
++    - No hardware loopback pin. With no offload, the audio engine serves WASAPI loopback
++      itself, so a loopback tap on the cable cannot compete with "Cable Out" for audio.
++
++    - RAW is the only processing mode. Windows opens a pin per mode a driver declares; with
++      one mode it mixes everything into one stream, and a cable should apply no processing.
++
++    - Exactly one format, 48 kHz / 16-bit / stereo PCM, matching "Cable Out" (see
++      micinwavtable.h). The ring copies bytes; it cannot resample, so both ends must agree.
++
++    Same pin layout as the sample's Bluetooth HFP speaker (KSPIN_WAVE_RENDER3_*), which is
++    the layout CMiniportWaveRT expects from a render filter that is not offload-capable.
++
++--*/
++
++#ifndef _LOOPIT7_CABLESPEAKERWAVTABLE_H_
++#define _LOOPIT7_CABLESPEAKERWAVTABLE_H_
++
++#define CABLE_CHANNELS                  2
++#define CABLE_BITS_PER_SAMPLE           16
++#define CABLE_SAMPLE_RATE               48000
++#define CABLE_BLOCK_ALIGN               (CABLE_CHANNELS * CABLE_BITS_PER_SAMPLE / 8)
++#define CABLE_BYTES_PER_SECOND          (CABLE_SAMPLE_RATE * CABLE_BLOCK_ALIGN)
++
++#define CABLESPEAKER_DEVICE_MAX_CHANNELS    CABLE_CHANNELS
++
++//=============================================================================
++static
++KSDATAFORMAT_WAVEFORMATEXTENSIBLE CableSpeakerHostPinSupportedDeviceFormats[] =
++{
++    { // 0
++        {
++            sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
++            0,
++            0,
++            0,
++            STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
++            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
++            STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
++        },
++        {
++            {
++                WAVE_FORMAT_EXTENSIBLE,
++                CABLE_CHANNELS,
++                CABLE_SAMPLE_RATE,
++                CABLE_BYTES_PER_SECOND,
++                CABLE_BLOCK_ALIGN,
++                CABLE_BITS_PER_SAMPLE,
++                sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
++            },
++            CABLE_BITS_PER_SAMPLE,
++            KSAUDIO_SPEAKER_STEREO,
++            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
++        }
++    }
++};
++
++//
++// Supported modes (only on streaming pins).
++//
++static
++MODE_AND_DEFAULT_FORMAT CableSpeakerHostPinSupportedDeviceModes[] =
++{
++    {
++        STATIC_AUDIO_SIGNALPROCESSINGMODE_RAW,
++        &CableSpeakerHostPinSupportedDeviceFormats[0].DataFormat
++    }
++};
++
++//
++// The entries here must follow the same order as the filter's pin
++// descriptor array.
++//
++static
++PIN_DEVICE_FORMATS_AND_MODES CableSpeakerPinDeviceFormatsAndModes[] =
++{
++    {
++        SystemRenderPin,
++        CableSpeakerHostPinSupportedDeviceFormats,
++        SIZEOF_ARRAY(CableSpeakerHostPinSupportedDeviceFormats),
++        CableSpeakerHostPinSupportedDeviceModes,
++        SIZEOF_ARRAY(CableSpeakerHostPinSupportedDeviceModes)
++    },
++    {
++        BridgePin,
++        NULL,
++        0,
++        NULL,
++        0
++    }
++};
++
++//=============================================================================
++static
++KSDATARANGE_AUDIO CableSpeakerPinDataRangesStream[] =
++{
++    { // 0
++        {
++            sizeof(KSDATARANGE_AUDIO),
++            KSDATARANGE_ATTRIBUTES,         // An attributes list follows this data range
++            0,
++            0,
++            STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
++            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
++            STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
++        },
++        CABLE_CHANNELS,
++        CABLE_BITS_PER_SAMPLE,
++        CABLE_BITS_PER_SAMPLE,
++        CABLE_SAMPLE_RATE,
++        CABLE_SAMPLE_RATE
++    }
++};
++
++static
++PKSDATARANGE CableSpeakerPinDataRangePointersStream[] =
++{
++    PKSDATARANGE(&CableSpeakerPinDataRangesStream[0]),
++    PKSDATARANGE(&PinDataRangeAttributeList)
++};
++
++//=============================================================================
++static
++KSDATARANGE CableSpeakerPinDataRangesBridge[] =
++{
++    {
++        sizeof(KSDATARANGE),
++        0,
++        0,
++        0,
++        STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
++        STATICGUIDOF(KSDATAFORMAT_SUBTYPE_ANALOG),
++        STATICGUIDOF(KSDATAFORMAT_SPECIFIER_NONE)
++    }
++};
++
++static
++PKSDATARANGE CableSpeakerPinDataRangePointersBridge[] =
++{
++    &CableSpeakerPinDataRangesBridge[0]
++};
++
++//=============================================================================
++static
++PCPIN_DESCRIPTOR CableSpeakerWaveMiniportPins[] =
++{
++    // Wave Out Streaming Pin (Renderer) KSPIN_WAVE_RENDER3_SINK_SYSTEM
++    {
++        MAX_INPUT_SYSTEM_STREAMS,
++        MAX_INPUT_SYSTEM_STREAMS,
++        0,
++        NULL,
++        {
++            0,
++            NULL,
++            0,
++            NULL,
++            SIZEOF_ARRAY(CableSpeakerPinDataRangePointersStream),
++            CableSpeakerPinDataRangePointersStream,
++            KSPIN_DATAFLOW_IN,
++            KSPIN_COMMUNICATION_SINK,
++            &KSCATEGORY_AUDIO,
++            NULL,
++            0
++        }
++    },
++    // Wave Out Bridge Pin (Renderer) KSPIN_WAVE_RENDER3_SOURCE
++    {
++        0,
++        0,
++        0,
++        NULL,
++        {
++            0,
++            NULL,
++            0,
++            NULL,
++            SIZEOF_ARRAY(CableSpeakerPinDataRangePointersBridge),
++            CableSpeakerPinDataRangePointersBridge,
++            KSPIN_DATAFLOW_OUT,
++            KSPIN_COMMUNICATION_NONE,
++            &KSCATEGORY_AUDIO,
++            NULL,
++            0
++        }
++    },
++};
++
++//=============================================================================
++static
++PCNODE_DESCRIPTOR CableSpeakerWaveMiniportNodes[] =
++{
++    // KSNODE_WAVE_DAC
++    {
++        0,                          // Flags
++        NULL,                       // AutomationTable
++        &KSNODETYPE_DAC,            // Type
++        NULL                        // Name
++    }
++};
++
++//=============================================================================
++static
++PCCONNECTION_DESCRIPTOR CableSpeakerWaveMiniportConnections[] =
++{
++    { PCFILTER_NODE,            KSPIN_WAVE_RENDER3_SINK_SYSTEM,     KSNODE_WAVE_DAC,   1 },
++    { KSNODE_WAVE_DAC,          0,                                  PCFILTER_NODE,     KSPIN_WAVE_RENDER3_SOURCE },
++};
++
++//=============================================================================
++static
++PCPROPERTY_ITEM PropertiesCableSpeakerWaveFilter[] =
++{
++    {
++        &KSPROPSETID_Pin,
++        KSPROPERTY_PIN_PROPOSEDATAFORMAT,
++        KSPROPERTY_TYPE_SET | KSPROPERTY_TYPE_BASICSUPPORT,
++        PropertyHandler_WaveFilter
++    },
++    {
++        &KSPROPSETID_Pin,
++        KSPROPERTY_PIN_PROPOSEDATAFORMAT2,
++        KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_BASICSUPPORT,
++        PropertyHandler_WaveFilter
++    }
++};
++
++DEFINE_PCAUTOMATION_TABLE_PROP(AutomationCableSpeakerWaveFilter, PropertiesCableSpeakerWaveFilter);
++
++//=============================================================================
++static
++PCFILTER_DESCRIPTOR CableSpeakerWaveMiniportFilterDescriptor =
++{
++    0,                                                  // Version
++    &AutomationCableSpeakerWaveFilter,                  // AutomationTable
++    sizeof(PCPIN_DESCRIPTOR),                           // PinSize
++    SIZEOF_ARRAY(CableSpeakerWaveMiniportPins),         // PinCount
++    CableSpeakerWaveMiniportPins,                       // Pins
++    sizeof(PCNODE_DESCRIPTOR),                          // NodeSize
++    SIZEOF_ARRAY(CableSpeakerWaveMiniportNodes),        // NodeCount
++    CableSpeakerWaveMiniportNodes,                      // Nodes
++    SIZEOF_ARRAY(CableSpeakerWaveMiniportConnections),  // ConnectionCount
++    CableSpeakerWaveMiniportConnections,                // Connections
++    0,                                                  // CategoryCount
++    NULL                                                // Categories  - use defaults (audio, render, capture)
++};
++
++#endif // _LOOPIT7_CABLESPEAKERWAVTABLE_H_
+diff --git a/audio/sysvad/TabletAudioSample/micintoptable.h b/audio/sysvad/TabletAudioSample/micintoptable.h
+index 329c2f2bb3363fdd7a629fbfc39706d6f931a52f..b6e5d953411b75613b363d2a6e65d126fac0dc82 100644
+--- a/audio/sysvad/TabletAudioSample/micintoptable.h
++++ b/audio/sysvad/TabletAudioSample/micintoptable.h
+@@ -30,7 +30,7 @@ DEFINE_GUID(MICIN_CUSTOM_NAME,
+ static
+ KSJACK_DESCRIPTION MicInJackDesc =
+ {
+-    KSAUDIO_SPEAKER_MONO,
++    KSAUDIO_SPEAKER_STEREO,     // LoopIt7 Cable: stereo, matching the only format this end accepts
+     JACKDESC_RGB(179, 201, 140),
+     eConnTypeCombination,
+     eGeoLocRear,
+diff --git a/audio/sysvad/TabletAudioSample/micinwavtable.h b/audio/sysvad/TabletAudioSample/micinwavtable.h
+index 64acba00c0c6887f3b5b12538a2eb3d17c278495..29862a9b5033fc75bf6c373a19b418ee0e415f77 100644
+--- a/audio/sysvad/TabletAudioSample/micinwavtable.h
++++ b/audio/sysvad/TabletAudioSample/micinwavtable.h
+@@ -16,21 +16,27 @@ Abstract:
+ #define _SYSVAD_MICINWAVTABLE_H_
+ 
+ //
+-// Mic in (external: headphone) range.
++// LoopIt7 Cable: "Cable Out", the recording end of the cable.
+ //
+-#define MICIN_DEVICE_MAX_CHANNELS           1       // Max Channels.
++// Exactly one format, 48 kHz / 16-bit / stereo PCM, the same as "Cable In" (see
++// cablespeakerwavtable.h): the ring copies bytes and cannot resample, so an exclusive-mode
++// program opening this end at another rate would otherwise hear the wrong pitch. Stereo
++// rather than the sample's mono for the same reason.
++//
++#define MICIN_DEVICE_MAX_CHANNELS           2       // Max Channels.
+ #define MICIN_MIN_BITS_PER_SAMPLE_PCM       16      // Min Bits Per Sample
+ #define MICIN_MAX_BITS_PER_SAMPLE_PCM       16      // Max Bits Per Sample
+-#define MICIN_MIN_SAMPLE_RATE               8000    // Min Sample Rate
++#define MICIN_MIN_SAMPLE_RATE               48000   // Min Sample Rate
+ #define MICIN_MAX_SAMPLE_RATE               48000   // Max Sample Rate
+ 
+ //
+-// Max # of pin instances.
++// Max # of pin instances. Each capture stream reads the cable with its own cursor, so
++// several programs recording at once all hear everything.
+ //
+ #define MICIN_MAX_INPUT_STREAMS             5
+ 
+ //=============================================================================
+-static 
++static
+ KSDATAFORMAT_WAVEFORMATEXTENSIBLE MicInPinSupportedDeviceFormats[] =
+ {
+     { // 0
+@@ -46,220 +52,30 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE MicInPinSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                1,
+-                8000,
+-                16000,
+-                2,
+-                16,
+-                sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+-            },
+-            16,
+-            KSAUDIO_SPEAKER_MONO,
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+-        }
+-    },
+-    { // 1
+-        {
+-            sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
+-            0,
+-            0,
+-            0,
+-            STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
+-            STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
+-        },
+-        {
+-            {
+-                WAVE_FORMAT_EXTENSIBLE,
+-                1,
+-                11025,
+-                22050,
+-                2,
+-                16,
+-                sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+-            },
+-            16,
+-            KSAUDIO_SPEAKER_MONO,
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+-        }
+-    },
+-    { // 2
+-        {
+-            sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
+-            0,
+-            0,
+-            0,
+-            STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
+-            STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
+-        },
+-        {
+-            {
+-                WAVE_FORMAT_EXTENSIBLE,
+-                1,
+-                16000,
+-                32000,
+-                2,
+-                16,
+-                sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+-            },
+-            16,
+-            KSAUDIO_SPEAKER_MONO,
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+-        }
+-    },
+-    { // 3
+-        {
+-            sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
+-            0,
+-            0,
+-            0,
+-            STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
+-            STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
+-        },
+-        {
+-            {
+-                WAVE_FORMAT_EXTENSIBLE,
+-                1,
+-                22050,
+-                44100,
+                 2,
+-                16,
+-                sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+-            },
+-            16,
+-            KSAUDIO_SPEAKER_MONO,
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+-        }
+-    },
+-    { // 4
+-        {
+-            sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
+-            0,
+-            0,
+-            0,
+-            STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
+-            STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
+-        },
+-        {
+-            {
+-                WAVE_FORMAT_EXTENSIBLE,
+-                1,
+-                24000,
+                 48000,
+-                2,
+-                16,
+-                sizeof(WAVEFORMATEXTENSIBLE)-sizeof(WAVEFORMATEX)
+-            },
+-            16,
+-            KSAUDIO_SPEAKER_MONO,
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+-        }
+-    },
+-    { // 5
+-        {
+-            sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
+-            0,
+-            0,
+-            0,
+-            STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
+-            STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
+-        },
+-        {
+-            {
+-                WAVE_FORMAT_EXTENSIBLE,
+-                1,
+-                32000,
+-                64000,
+-                2,
++                192000,
++                4,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_MONO,
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+-        }
+-    },
+-    { // 6
+-        {
+-            sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
+-            0,
+-            0,
+-            0,
+-            STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
+-            STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
+-        },
+-        {
+-            {
+-                WAVE_FORMAT_EXTENSIBLE,
+-                1,
+-                44100,
+-                88200,
+-                2,
+-                16,
+-                sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+-            },
+-            16,
+-            KSAUDIO_SPEAKER_MONO,
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+-        }
+-    },
+-    { // 7
+-        {
+-            sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
+-            0,
+-            0,
+-            0,
+-            STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
+-            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
+-            STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
+-        },
+-        {
+-            {
+-                WAVE_FORMAT_EXTENSIBLE,
+-                1,
+-                48000,
+-                96000,
+-                2,
+-                16,
+-                sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+-            },
+-            16,
+-            KSAUDIO_SPEAKER_MONO,
++            KSAUDIO_SPEAKER_STEREO,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     }
+ };
+ 
+ //
+-// Supported modes (only on streaming pins).
++// Supported modes (only on streaming pins). RAW only: the cable applies no processing,
++// and declaring the sample's speech and communications modes would tell Windows it did.
+ //
+ static
+ MODE_AND_DEFAULT_FORMAT MicInPinSupportedDeviceModes[] =
+ {
+     {
+         STATIC_AUDIO_SIGNALPROCESSINGMODE_RAW,
+-        &MicInPinSupportedDeviceFormats[SIZEOF_ARRAY(MicInPinSupportedDeviceFormats) - 1].DataFormat,
+-    },
+-    {
+-        STATIC_AUDIO_SIGNALPROCESSINGMODE_DEFAULT,
+-        &MicInPinSupportedDeviceFormats[SIZEOF_ARRAY(MicInPinSupportedDeviceFormats) - 1].DataFormat,
+-    },
+-    {
+-        STATIC_AUDIO_SIGNALPROCESSINGMODE_SPEECH,
+-        &MicInPinSupportedDeviceFormats[2].DataFormat, // 16KHz
+-    },
+-    {
+-        STATIC_AUDIO_SIGNALPROCESSINGMODE_COMMUNICATIONS,
+-        &MicInPinSupportedDeviceFormats[4].DataFormat, // 24KHz
+-    },
+-    {
+-        STATIC_AUDIO_SIGNALPROCESSINGMODE_FAR_FIELD_SPEECH,
+-        &MicInPinSupportedDeviceFormats[2].DataFormat, // 16KHz
++        &MicInPinSupportedDeviceFormats[0].DataFormat,
+     },
+ };
+ 
+diff --git a/audio/sysvad/TabletAudioSample/minipairs.h b/audio/sysvad/TabletAudioSample/minipairs.h
+index 0d00f5a549b8d92befb5df6bffdef92ea27c483a..00a6b567e2b5fc113e5109ba8ea730aa04584a47 100644
+--- a/audio/sysvad/TabletAudioSample/minipairs.h
++++ b/audio/sysvad/TabletAudioSample/minipairs.h
+@@ -18,6 +18,7 @@ Abstract:
+ #include "speakertopo.h"
+ #include "speakertoptable.h"
+ #include "speakerwavtable.h"
++#include "cablespeakerwavtable.h"
+ 
+ #include "speakerhptopo.h"
+ #include "speakerhptoptable.h"
+@@ -502,17 +503,64 @@ ENDPOINT_MINIPAIR MicArray3Miniports =
+     NULL, 0, NULL,                          // audio module settings.
+ };
+ 
++/*********************************************************************
++* LoopIt7 Cable: Topology/Wave bridge connection for "Cable In"      *
++*                                                                    *
++*              +------+                +------+                      *
++*              | Wave |                | Topo |                      *
++*              |      |                |      |                      *
++* System   --->|0    1|--------------->|0    1|---> Line Out         *
++*              |      |                |      |                      *
++*              +------+                +------+                      *
++*                                                                    *
++* The sample's speaker topology, fed by the cable's own wave filter  *
++* (cablespeakerwavtable.h) instead of the offload-capable speaker.   *
++*********************************************************************/
++static
++PHYSICALCONNECTIONTABLE CableSpeakerTopologyPhysicalConnections[] =
++{
++    {
++        KSPIN_TOPO_WAVEOUT_SOURCE,  // TopologyIn
++        KSPIN_WAVE_RENDER3_SOURCE,  // WaveOut (no offload, no loopback)
++        CONNECTIONTYPE_WAVE_OUTPUT
++    }
++};
++
++static
++ENDPOINT_MINIPAIR CableSpeakerMiniports =
++{
++    eSpeakerDevice,
++    L"TopologySpeaker",                                     // matches KSNAME_TopologySpeaker in the inf's [Strings] section
++    NULL,                                                   // optional template name
++    CreateMiniportTopologySYSVAD,
++    &SpeakerTopoMiniportFilterDescriptor,
++    0, NULL,                                                // Interface properties
++    L"WaveSpeaker",                                         // matches KSNAME_WaveSpeaker in the inf's [Strings] section
++    NULL,                                                   // optional template name
++    CreateMiniportWaveRTSYSVAD,
++    &CableSpeakerWaveMiniportFilterDescriptor,
++    0, NULL,                                                // Interface properties
++    CABLESPEAKER_DEVICE_MAX_CHANNELS,
++    CableSpeakerPinDeviceFormatsAndModes,
++    SIZEOF_ARRAY(CableSpeakerPinDeviceFormatsAndModes),
++    CableSpeakerTopologyPhysicalConnections,
++    SIZEOF_ARRAY(CableSpeakerTopologyPhysicalConnections),
++    ENDPOINT_NO_FLAGS,
++    NULL, 0, NULL,                                          // audio module settings.
++};
++
+ //=============================================================================
+ //
+ // Render miniport pairs.
+ //
++// LoopIt7 Cable is one playback endpoint and one recording endpoint, nothing
++// else. The sample's other endpoints stay defined above so this file needs no
++// other edits, but they are never instantiated, so they never appear.
++//
+ static
+-PENDPOINT_MINIPAIR  g_RenderEndpoints[] = 
++PENDPOINT_MINIPAIR  g_RenderEndpoints[] =
+ {
+-    &SpeakerMiniports,
+-    &SpeakerHpMiniports,
+-    &HdmiMiniports,
+-    &SpdifMiniports,
++    &CableSpeakerMiniports,
+ };
+ 
+ #define g_cRenderEndpoints  (SIZEOF_ARRAY(g_RenderEndpoints))
+@@ -522,12 +570,9 @@ PENDPOINT_MINIPAIR  g_RenderEndpoints[] =
+ // Capture miniport pairs.
+ //
+ static
+-PENDPOINT_MINIPAIR  g_CaptureEndpoints[] = 
++PENDPOINT_MINIPAIR  g_CaptureEndpoints[] =
+ {
+     &MicInMiniports,
+-    &MicArray1Miniports,
+-    &MicArray2Miniports,
+-    &MicArray3Miniports,
+ };
+ 
+ #define g_cCaptureEndpoints (SIZEOF_ARRAY(g_CaptureEndpoints))
+diff --git a/audio/sysvad/adapter.cpp b/audio/sysvad/adapter.cpp
+index 0f44c593f0e636b5cd17d00aa1054c64caae6d6d..cde67be5fc49c087a283d5429702ef8af89413ec 100644
+--- a/audio/sysvad/adapter.cpp
++++ b/audio/sysvad/adapter.cpp
+@@ -246,30 +246,29 @@ _Dispatch_type_(IRP_MJ_PNP)
+ DRIVER_DISPATCH PnpHandler;
+ 
+ //
+-// Rendering streams are not saved to a file by default. Use the registry value 
+-// DoNotCreateDataFiles (DWORD) = 0 to override this default.
++// Rendering streams are not saved to a file.
+ //
+-DWORD g_DoNotCreateDataFiles = 1;  // default is off.
++// LoopIt7 Cable: the sample let the registry value DoNotCreateDataFiles turn this on. A cable
++// carries whatever people play into it, so writing that to disk is never wanted, and this
++// debug path is also the one that crashed the driver when it ran uninitialised. Always off.
++//
++DWORD g_DoNotCreateDataFiles = 1;
+ DWORD g_DisableToneGenerator = 0;  // default is to generate tones.
+ UNICODE_STRING g_RegistryPath;      // This is used to store the registry settings path for the driver
+ 
+ 
+-#ifdef SYSVAD_BTH_BYPASS
+ //
+-// This driver listens for arrival/removal of the bth sco bypass interfaces by 
+-// default. Use the registry value DisableBthScoBypass (DWORD) > 0 to override 
+-// this default.
++// LoopIt7 Cable: the sample listens for real Bluetooth HFP and USB headsets and creates
++// endpoints for them. A cable must never touch the user's real devices, so both are off and
++// cannot be turned on from the registry. They stay compiled in only because the sample's
++// shared code does not build without them.
+ //
+-DWORD g_DisableBthScoBypass = 0;   // default is SCO bypass enabled.
++#ifdef SYSVAD_BTH_BYPASS
++DWORD g_DisableBthScoBypass = 1;
+ #endif // SYSVAD_BTH_BYPASS
+ 
+ #ifdef SYSVAD_USB_SIDEBAND
+-//
+-// This driver listens for arrival/removal of the USB Sideband interfaces by 
+-// default. Use the registry value DisableUsbSideband (DWORD) > 0 to override 
+-// this default.
+-//
+-DWORD g_DisableUsbSideband = 0;   // default is USB bypass enabled.
++DWORD g_DisableUsbSideband = 1;
+ #endif // SYSVAD_USB_SIDEBAND
+ 
+ #ifdef SYSVAD_A2DP_SIDEBAND
+@@ -429,14 +428,9 @@ Returns:
+     HANDLE                      DriverKey;
+     RTL_QUERY_REGISTRY_TABLE    paramTable[] = {
+     // QueryRoutine     Flags                                               Name                     EntryContext             DefaultType                                                    DefaultData              DefaultLength
+-        { NULL,   RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK, L"DoNotCreateDataFiles", &g_DoNotCreateDataFiles, (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_DWORD, &g_DoNotCreateDataFiles, sizeof(ULONG)},
++        // LoopIt7 Cable: DoNotCreateDataFiles, DisableBthScoBypass and DisableUsbSideband are
++        // no longer read; see where those globals are defined.
+         { NULL,   RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK, L"DisableToneGenerator", &g_DisableToneGenerator, (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_DWORD, &g_DisableToneGenerator, sizeof(ULONG)},
+-#ifdef SYSVAD_BTH_BYPASS
+-        { NULL,   RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK, L"DisableBthScoBypass",  &g_DisableBthScoBypass,  (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_DWORD, &g_DisableBthScoBypass,  sizeof(ULONG)},
+-#endif // SYSVAD_BTH_BYPASS
+-#ifdef SYSVAD_USB_SIDEBAND
+-        { NULL,   RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK, L"DisableUsbSideband",  &g_DisableUsbSideband,  (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_DWORD, &g_DisableUsbSideband,  sizeof(ULONG)},
+-#endif // SYSVAD_USB_SIDEBAND
+         { NULL,   0,                                                        NULL,                    NULL,                    0,                                                             NULL,                    0}
+     };
+ 
+diff --git a/audio/sysvad/common.cpp b/audio/sysvad/common.cpp
+index 1334411e5243d66c3154ca8d4cdbff952e9ed02a..60ca8e8caa8a078a8144711cebc5cccc7b2b11ba 100644
+--- a/audio/sysvad/common.cpp
++++ b/audio/sysvad/common.cpp
+@@ -88,6 +88,9 @@ class CAdapterCommon :
+ 
+         DWORD                   m_dwIdleRequests;
+ 
++        // LoopIt7 Cable: not part of Microsoft's sample. See CableRing.h.
++        CCableRing               m_CableRing;
++
+ #ifdef SYSVAD_USB_SIDEBAND
+         typedef struct _SysvadPowerRelationsDo
+         {
+@@ -276,7 +279,7 @@ class CAdapterCommon :
+         );
+ 
+         STDMETHODIMP_(NTSTATUS) NotifyEndpointPair
+-        ( 
++        (
+             _In_ WCHAR              *RenderEndpointTopoName,
+             _In_ ULONG              RenderEndpointNameLen,
+             _In_ ULONG              RenderPinId,
+@@ -285,6 +288,12 @@ class CAdapterCommon :
+             _In_ ULONG              CapturePinId
+         );
+ 
++        // LoopIt7 Cable: not part of Microsoft's sample. See CableRing.h.
++        STDMETHODIMP_(PCCableRing) GetCableRing(void)
++        {
++            return &m_CableRing;
++        }
++
+ #ifdef SYSVAD_BTH_BYPASS
+         STDMETHODIMP_(NTSTATUS) InitBthScoBypass();
+         
+@@ -838,6 +847,23 @@ Return Value:
+     // Initialize SaveData class.
+     //
+     CSaveData::SetDeviceObject(DeviceObject);   //device object is needed by CSaveData
++
++    //
++    // LoopIt7 Cable: the ring that joins the cable's render stream to its capture streams.
++    // Both endpoints accept exactly one format, 48 kHz / 16-bit / stereo PCM (see
++    // TabletAudioSample\cablespeakerwavtable.h and micinwavtable.h), which is what lets the
++    // ring move bytes without converting anything. Not part of Microsoft's sample.
++    //
++    {
++        const ULONG CableBlockAlign     = 2 * (16 / 8);                 // channels * bytes/sample
++        const ULONG CableBytesPerSecond = 48000 * CableBlockAlign;
++
++        ntStatus = m_CableRing.Allocate(CableBytesPerSecond, CableBlockAlign);
++        IF_FAILED_ACTION_JUMP(
++            ntStatus,
++            DPF(D_ERROR, ("CCableRing::Allocate failed, 0x%x", ntStatus)),
++            Done);
++    }
+ Done:
+ 
+     return ntStatus;
+@@ -4810,7 +4836,8 @@ Return Value:
+ 
+         // Allocate the key value name string
+         pwstrKeyValueName = (PWSTR)ExAllocatePool2(POOL_FLAG_NON_PAGED, kvFullInfo->NameLength + sizeof(WCHAR)*2, MINADAPTER_POOLTAG);
+-        IF_TRUE_ACTION_JUMP(kvFullInfo == NULL, ntStatus = STATUS_INSUFFICIENT_RESOURCES, loop_exit);
++        // LoopIt7 Cable: the sample tested kvFullInfo here, so a failed allocation was used.
++        IF_TRUE_ACTION_JUMP(pwstrKeyValueName == NULL, ntStatus = STATUS_INSUFFICIENT_RESOURCES, loop_exit);
+ 
+         // Copy the key value name from the full information struct
+         RtlStringCbCopyNW(pwstrKeyValueName, kvFullInfo->NameLength + sizeof(WCHAR)*2, kvFullInfo->Name, kvFullInfo->NameLength);
+@@ -4830,6 +4857,8 @@ Return Value:
+         if (pwstrKeyValueName)
+         {
+             ExFreePoolWithTag(pwstrKeyValueName, MINADAPTER_POOLTAG);
++            // LoopIt7 Cable: cleared so a failure on the next pass cannot free it twice.
++            pwstrKeyValueName = NULL;
+         }
+ 
+         // Bail if anything failed
+@@ -4916,7 +4945,8 @@ Return Value:
+ 
+         // Allocate the key name string 
+         pwstrKeyName = (PWSTR)ExAllocatePool2(POOL_FLAG_NON_PAGED, kBasicInfo->NameLength + sizeof(WCHAR), MINADAPTER_POOLTAG);
+-        IF_TRUE_ACTION_JUMP(kBasicInfo == NULL, ntStatus = STATUS_INSUFFICIENT_RESOURCES, loop_exit);
++        // LoopIt7 Cable: the sample tested kBasicInfo here, so a failed allocation was used.
++        IF_TRUE_ACTION_JUMP(pwstrKeyName == NULL, ntStatus = STATUS_INSUFFICIENT_RESOURCES, loop_exit);
+ 
+         // Copy the key name from the basic information struct
+         RtlStringCbCopyNW(pwstrKeyName, kBasicInfo->NameLength + sizeof(WCHAR), kBasicInfo->Name, kBasicInfo->NameLength);
+@@ -4931,15 +4961,17 @@ Return Value:
+         InitializeObjectAttributes(&hCurrentSourceKeyAttributes, &strKeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, _hSourceKey, NULL);
+ 
+         // Open the currently enumerated source key
++        // LoopIt7 Cable: the sample also closed the handle on these two failure paths, and then
++        // again at loop_exit, closing an invalid or already closed handle. loop_exit alone does it.
+         ntStatus = ZwOpenKey(&hCurrentSourceKey, KEY_READ, &hCurrentSourceKeyAttributes);
+-        IF_FAILED_ACTION_JUMP(ntStatus, ZwClose(hCurrentSourceKey), loop_exit);
++        IF_FAILED_JUMP(ntStatus, loop_exit);
+ 
+         // Initialize attributes to create the new destination key
+         InitializeObjectAttributes(&hNewDestinationKeyAttributes, &strKeyName, OBJ_KERNEL_HANDLE, _hDestinationKey, NULL);
+ 
+         // Create the key at the destination
+         ntStatus = ZwCreateKey(&hNewDestinationKey, KEY_WRITE, &hNewDestinationKeyAttributes, 0, NULL, REG_OPTION_NON_VOLATILE, &ulDisposition);
+-        IF_FAILED_ACTION_JUMP(ntStatus, ZwClose(hCurrentSourceKey), loop_exit);
++        IF_FAILED_JUMP(ntStatus, loop_exit);
+ 
+         // Now copy the contents of the currently enumerated key to the destination
+         ntStatus = CopyRegistryKey(hCurrentSourceKey, hNewDestinationKey, TRUE);
+@@ -4947,21 +4979,25 @@ Return Value:
+ 
+     loop_exit:
+         // Free the key name string
++        // LoopIt7 Cable: each one is cleared once released, so the next pass starts clean.
+         if (pwstrKeyName)
+         {
+             ExFreePoolWithTag(pwstrKeyName, MINADAPTER_POOLTAG);
++            pwstrKeyName = NULL;
+         }
+ 
+         // Close the current source key
+         if (hCurrentSourceKey)
+         {
+             ZwClose(hCurrentSourceKey);
++            hCurrentSourceKey = NULL;
+         }
+ 
+         // Close the new destination key
+         if (hNewDestinationKey)
+         {
+             ZwClose(hNewDestinationKey);
++            hNewDestinationKey = NULL;
+         }
+ 
+         // Bail if anything failed
+diff --git a/audio/sysvad/common.h b/audio/sysvad/common.h
+index 17e8ebca54798d4053ed2ad163e2d550479379a0..cf2663c219cd07dae95f087ae0800cba4a5c6683 100644
+--- a/audio/sysvad/common.h
++++ b/audio/sysvad/common.h
+@@ -15,6 +15,8 @@ Abstract:
+ #ifndef _SYSVAD_COMMON_H_
+ #define _SYSVAD_COMMON_H_
+ 
++#include "CableRing.h"
++
+ #define HNSTIME_PER_MILLISECOND 10000
+ 
+ //=============================================================================
+@@ -688,8 +690,8 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
+     STDMETHOD_(NTSTATUS, UpdatePowerRelations)(_In_ PIRP Irp);
+ #endif // SYSVAD_USB_SIDEBAND
+ 
+-    STDMETHOD_(NTSTATUS, NotifyEndpointPair) 
+-    ( 
++    STDMETHOD_(NTSTATUS, NotifyEndpointPair)
++    (
+         THIS_
+         _In_ WCHAR  *RenderEndpointTopoName,
+         _In_ ULONG  RenderEndpointNameLen,
+@@ -698,6 +700,13 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
+         _In_ ULONG  CaptureEndpointNameLen,
+         _In_ ULONG  CapturePinId
+     ) PURE;
++
++    // LoopIt7 Cable: the ring buffer shared by this device's one render stream and one
++    // capture stream. Not part of Microsoft's sample, see CableRing.h.
++    STDMETHOD_(PCCableRing, GetCableRing)
++    (
++        THIS
++    ) PURE;
+ };
+ 
+ typedef IAdapterCommon *PADAPTERCOMMON;

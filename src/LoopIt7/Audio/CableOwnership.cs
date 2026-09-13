@@ -124,9 +124,14 @@ public static class CableOwnership
         // several products. VB-Audio's plain cable, their A+B pack and VoiceMeeter's VAIO are
         // three different drivers that all say "VB-Audio", and installing one of them is no
         // licence to rename the other two.
+        // A pack installs one driver per cable (the A+B pack says "VB-Audio Cable A" and
+        // "VB-Audio Cable B"), so setup writes them all, separated by '|'. Each is matched in
+        // full, which is what keeps a C+D pack on the same machine somebody else's.
+        string[] drivers = installedDriver?
+            .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+
         bool Ours(AudioDeviceInfo device) =>
-            installedDriver is not null &&
-            device.InterfaceName.Contains(installedDriver, StringComparison.OrdinalIgnoreCase);
+            drivers.Any(driver => device.InterfaceName.Contains(driver, StringComparison.OrdinalIgnoreCase));
 
         if (!settings.CableBaselineTaken)
         {

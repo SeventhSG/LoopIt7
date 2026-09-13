@@ -5,7 +5,7 @@
 ; wizard offers an all users install for anyone who wants one.
 
 #define AppName        "LoopIt7"
-#define AppVersion     "1.5.0"
+#define AppVersion     "1.6.0"
 #define AppPublisher   "SeventhSG"
 #define AppUrl         "https://github.com/SeventhSG/LoopIt7"
 #define AppExeName     "LoopIt7.exe"
@@ -20,15 +20,25 @@
 ; from the note this script leaves in installed-cable.txt: the endpoints do not exist until
 ; the driver's own installer has finished, and the app is the thing that knows how to put
 ; every name back when it is uninstalled.
-#define CableSetup     "cable\VBCABLE_Setup_x64.exe"
-; The driver string VB-Audio's plain cable reports, and the thing setup looks for. Their
-; A+B pack and VoiceMeeter's VAIO are different drivers that also say VB-Audio, so this
-; is deliberately the whole product name and not just the vendor.
-#define CableDriver    "VB-Audio Virtual Cable"
-; Bump this whenever the redistributable in installer\cable\ is replaced with a newer
-; one. It is what tells an upgrade that the cable already on the machine is out of date.
+;
+; The cable is VB-Audio's A+B pack: two cables, A and B, each a separate driver with its own
+; setup. It is the pack rather than their plain cable because far fewer people already have
+; it, so the cables setup adds are almost always new ones LoopIt7 may name, not a cable the
+; user's OBS or Discord already points at. Put the pack's two x64 setups in installer\cable\
+; under these names (rename them if the pack's differ).
+#define CableSetupA    "cable\VBCABLE_A_Setup_x64.exe"
+#define CableSetupB    "cable\VBCABLE_B_Setup_x64.exe"
+; The driver strings the two cables report, and what setup looks for. The plain cable,
+; the C+D pack and VoiceMeeter's VAIO are different drivers that also say VB-Audio, so these
+; are the whole product names and not just the vendor. The app reads them back from
+; installed-cable.txt, separated by '|'.
+#define CableDriverA   "VB-Audio Cable A"
+#define CableDriverB   "VB-Audio Cable B"
+#define CableDriver    CableDriverA + "|" + CableDriverB
+; Bump this whenever the redistributables in installer\cable\ are replaced with newer
+; ones. It is what tells an upgrade that the cables already on the machine are out of date.
 #define CableVersion   "1.0.3.8"
-#if FileExists(AddBackslash(SourcePath) + CableSetup)
+#if FileExists(AddBackslash(SourcePath) + CableSetupA) && FileExists(AddBackslash(SourcePath) + CableSetupB)
   #define BundleCable
 #endif
 
@@ -81,17 +91,18 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Offered whenever this exact cable is missing, even on a machine that already has cables of
 ; another make. Those belong to somebody else's setup, and a cable LoopIt7 may not rename is a
 ; cable that cannot carry the user's own name into Discord.
-Name: "cable"; Description: "Install a virtual audio cable. LoopIt7 names it ""LoopIt7 Cable"", and that is what you pick in a DAW, Discord or OBS to play into LoopIt7"; GroupDescription: "Virtual audio cable:"; Check: not CableInstalled
+Name: "cable"; Description: "Install two virtual audio cables. LoopIt7 names them after itself, and they are what you pick in a DAW, Discord or OBS to play into or record from LoopIt7"; GroupDescription: "Virtual audio cables:"; Check: not CableInstalled
 ; A cable LoopIt7 installed is LoopIt7's to keep current. Without this the check above
 ; would see a cable present on every later upgrade and quietly skip it forever.
-Name: "cableupdate"; Description: "Update the virtual audio cable LoopIt7 installed"; GroupDescription: "Virtual audio cable:"; Check: OurCableIsOutOfDate
+Name: "cableupdate"; Description: "Update the virtual audio cables LoopIt7 installed"; GroupDescription: "Virtual audio cables:"; Check: OurCableIsOutOfDate
 #endif
 
 [Files]
 Source: "..\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\README.txt"; DestDir: "{app}"; Flags: ignoreversion
 #ifdef BundleCable
-Source: "{#CableSetup}"; DestDir: "{tmp}"; Flags: deleteafterinstall; Tasks: cable cableupdate
+Source: "{#CableSetupA}"; DestDir: "{tmp}"; Flags: deleteafterinstall; Tasks: cable cableupdate
+Source: "{#CableSetupB}"; DestDir: "{tmp}"; Flags: deleteafterinstall; Tasks: cable cableupdate
 #endif
 
 [Icons]
@@ -102,7 +113,8 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 #ifdef BundleCable
 ; VB-Audio's installer asks for administrator rights itself, which is why this goes through
 ; the shell rather than being run directly: LoopIt7's own setup stays unelevated.
-Filename: "{tmp}\VBCABLE_Setup_x64.exe"; Parameters: "-i -h"; StatusMsg: "Installing the virtual audio cable..."; Flags: shellexec waituntilterminated; Tasks: cable cableupdate
+Filename: "{tmp}\VBCABLE_A_Setup_x64.exe"; Parameters: "-i -h"; StatusMsg: "Installing virtual audio cable A..."; Flags: shellexec waituntilterminated; Tasks: cable cableupdate
+Filename: "{tmp}\VBCABLE_B_Setup_x64.exe"; Parameters: "-i -h"; StatusMsg: "Installing virtual audio cable B..."; Flags: shellexec waituntilterminated; Tasks: cable cableupdate
 #endif
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
@@ -176,7 +188,7 @@ begin
   Result := FileExists(Marker) and (OurCableVersion() <> '{#CableVersion}');
 end;
 
-{ Whether VB-Audio's plain cable is already on this machine.
+{ Whether either cable of VB-Audio's A+B pack is already on this machine.
   Deliberately not "any cable at all". Somebody running Wave Link, NVIDIA Broadcast or
   VoiceMeeter has cables, but they are wired into their own setup and are not ours to rename,
   so without one of our own LoopIt7 could never put its name on anything. They get the offer
@@ -197,7 +209,8 @@ begin
     if RegQueryStringValue(HKLM64, RenderEndpoints + '\' + Endpoints[I] + '\Properties',
         InterfaceNameValue, Iface) then
     begin
-      if Pos(Lowercase('{#CableDriver}'), Lowercase(Iface)) > 0 then
+      if (Pos(Lowercase('{#CableDriverA}'), Lowercase(Iface)) > 0) or
+         (Pos(Lowercase('{#CableDriverB}'), Lowercase(Iface)) > 0) then
       begin
         Result := True;
         Exit;

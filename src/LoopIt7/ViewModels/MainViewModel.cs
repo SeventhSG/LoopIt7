@@ -58,6 +58,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private CableViewModel? _selectedCable;
     private int _liveNodeCount;
     private string _newVirtualOutputName = string.Empty;
+    private PatchPageViewModel? _selectedPage;
 
     /// <summary>The cable carrying LoopIt7's own name, and the one that could be asked to.</summary>
     private CableInlet? _ownCable;
@@ -103,13 +104,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             if (p is WorkspaceTab tab) Tab = tab;
         });
+        AddPageCommand = new RelayCommand(_ => AddPage());
+        DeletePageCommand = new RelayCommand(p => DeletePage(p as PatchPageViewModel), _ => Pages.Count > 1);
 
         foreach (var preset in _settings.Presets) Presets.Add(preset);
 
         RefreshDevices();
         RefreshApplications();
         RebuildDeviceRows();
-        RestoreWorkspace(_settings.Nodes, _settings.Cables);
+
+        InitializePages();
+        var activePage = _settings.Pages.First(p => p.Id == _settings.ActivePageId);
+        RestoreWorkspace(activePage.Nodes, activePage.Cables);
         ReleaseLeftoverTakeovers();
 
         Midi.ApplySavedRoutes(_settings.MidiRoutes.Select(r => (r.Input, r.Output)));
@@ -148,6 +154,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<DestinationNodeViewModel> Destinations { get; } = [];
     public ObservableCollection<CableViewModel> Cables { get; } = [];
     public ObservableCollection<PatchPreset> Presets { get; } = [];
+
+    /// <summary>The patchbay's tabs, in order, Excel sheet style.</summary>
+    public ObservableCollection<PatchPageViewModel> Pages { get; } = [];
 
     /// <summary>Every possible source endpoint: real inputs plus every output tapped in loopback.</summary>
     public ObservableCollection<AudioDeviceInfo> InputDevices { get; } = [];
@@ -193,6 +202,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand ReleaseCableCommand { get; }
     public RelayCommand OpenProjectCommand { get; }
     public RelayCommand SelectTabCommand { get; }
+    public RelayCommand AddPageCommand { get; }
+    public RelayCommand DeletePageCommand { get; }
 
     public const string ProjectUrl = "https://github.com/SeventhSG/LoopIt7";
 
@@ -218,6 +229,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public bool IsPatchbayTab => _tab == WorkspaceTab.Patchbay;
     public bool IsDevicesTab => _tab == WorkspaceTab.Devices;
     public bool IsMidiTab => _tab == WorkspaceTab.Midi;
+
+    /// <summary>The page on the canvas right now. Setting it swaps the whole patchbay for the one saved under that tab.</summary>
+    public PatchPageViewModel? SelectedPage
+    {
+        get => _selectedPage;
+        set
+        {
+            if (value is null || ReferenceEquals(value, _selectedPage) || !Pages.Contains(value)) return;
+            SwitchToPage(value);
+        }
+    }
 
     public bool IsRunning
     {
@@ -476,6 +498,140 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         StopRouting();
         StartRouting();
+    }
+
+    // Pages: the patchbay's own tabs, one saved set of boxes and cables per page
+
+    /// <summary>
+    /// Builds the tab strip from what was saved, migrating a settings file from before pages
+    /// existed: whatever was on the one canvas becomes "Page 1", so nobody's patch disappears
+    /// the first time this runs.
+    /// </summary>
+    private void InitializePages()
+    {
+        if (_settings.Pages.Count == 0)
+        {
+            _settings.Pages.Add(new PatchPageSettings
+            {
+                Id = NewId(),
+                Name = "Page 1",
+                Nodes = _settings.Nodes,
+                Cables = _settings.Cables
+            });
+
+            _settings.Nodes = [];
+            _settings.Cables = [];
+        }
+
+        if (_settings.Pages.All(p => p.Id != _settings.ActivePageId))
+        {
+            _settings.ActivePageId = _settings.Pages[0].Id;
+        }
+
+        foreach (var saved in _settings.Pages)
+        {
+            var page = new PatchPageViewModel(saved.Id, saved.Name) { IsActive = saved.Id == _settings.ActivePageId };
+            WirePage(page);
+            Pages.Add(page);
+            if (page.IsActive) _selectedPage = page;
+        }
+    }
+
+    private void WirePage(PatchPageViewModel page)
+    {
+        page.Renamed += (_, _) =>
+        {
+            if (_settings.Pages.FirstOrDefault(p => p.Id == page.Id) is { } saved) saved.Name = page.Name;
+            Persist();
+        };
+    }
+
+    private void AddPage()
+    {
+        string name = NextPageName();
+        var saved = new PatchPageSettings { Id = NewId(), Name = name };
+        _settings.Pages.Add(saved);
+
+        var page = new PatchPageViewModel(saved.Id, name);
+        WirePage(page);
+        Pages.Add(page);
+
+        SwitchToPage(page);
+        Notice = $"Added \"{name}\".";
+    }
+
+    private string NextPageName()
+    {
+        var taken = new HashSet<string>(Pages.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+        int n = Pages.Count + 1;
+        string name = $"Page {n}";
+        while (taken.Contains(name)) name = $"Page {++n}";
+        return name;
+    }
+
+    private void DeletePage(PatchPageViewModel? page)
+    {
+        if (page is null || Pages.Count <= 1) return;
+
+        int index = Pages.IndexOf(page);
+        if (index < 0) return;
+
+        if (ReferenceEquals(page, _selectedPage))
+        {
+            var next = Pages[index == Pages.Count - 1 ? index - 1 : index + 1];
+            SwitchToPage(next);
+        }
+
+        _settings.Pages.RemoveAll(p => p.Id == page.Id);
+        Pages.Remove(page);
+        Persist();
+
+        Notice = $"Deleted \"{page.Name}\".";
+    }
+
+    /// <summary>
+    /// Swaps the whole canvas for another page's. Routing is stopped first rather than carried
+    /// across: the topology changing under a live mix is not something to do without being
+    /// asked to start it again.
+    /// </summary>
+    private void SwitchToPage(PatchPageViewModel newPage)
+    {
+        if (ReferenceEquals(newPage, _selectedPage)) return;
+
+        bool wasRunning = IsRunning;
+        if (wasRunning) StopRouting();
+
+        bool wasLoading = _loading;
+        _loading = true;
+
+        // Captured before anything about to be torn down can overwrite it.
+        if (_selectedPage is { } current)
+        {
+            current.IsActive = false;
+            if (_settings.Pages.FirstOrDefault(p => p.Id == current.Id) is { } currentSettings)
+            {
+                currentSettings.Nodes = CaptureNodes();
+                currentSettings.Cables = CaptureCables();
+            }
+        }
+
+        foreach (var cable in Cables.ToList()) RemoveCable(cable, persist: false);
+        foreach (var node in AllNodes().ToList()) RemoveNode(node);
+
+        _selectedPage = newPage;
+        newPage.IsActive = true;
+        _settings.ActivePageId = newPage.Id;
+        OnPropertyChanged(nameof(SelectedPage));
+
+        var pageSettings = _settings.Pages.FirstOrDefault(p => p.Id == newPage.Id);
+        RestoreWorkspace(pageSettings?.Nodes ?? [], pageSettings?.Cables ?? []);
+
+        _loading = wasLoading;
+        Finish();
+
+        Notice = wasRunning
+            ? $"Switched to \"{newPage.Name}\". Routing stopped; start it again when you're ready."
+            : null;
     }
 
     // Building the patchbay
@@ -1730,8 +1886,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (_loading || _disposed) return;
 
         _settings.LatencyMs = LatencyMs;
-        _settings.Nodes = CaptureNodes();
-        _settings.Cables = CaptureCables();
+
+        if (_settings.Pages.FirstOrDefault(p => p.Id == _settings.ActivePageId) is { } active)
+        {
+            active.Nodes = CaptureNodes();
+            active.Cables = CaptureCables();
+        }
+
         _settings.Presets = [.. Presets];
         _settings.MidiRoutes = [.. Midi.NamedRoutes().Select(r => new MidiRouteSettings { Input = r.Input, Output = r.Output })];
 

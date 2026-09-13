@@ -26,11 +26,11 @@
                     <StackPanel Grid.Column="0" Margin="0,0,16,0">
                         <TextBlock Text="No software cable is installed" Style="{StaticResource SectionLabel}" />
                         <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,5,0,0"
-                                   Text="LoopIt7 can send audio to any output on this machine, and it can capture a single program without one. To hand a mix to another program as if it were a microphone, Windows needs a virtual cable, and a virtual cable is a signed kernel driver. VB-Audio's is free and takes a minute to install." />
+                                   Text="LoopIt7 can send audio to any output on this machine, and it can capture a single program without one. To hand a mix to another program as if it were a microphone, Windows needs a virtual cable, and a virtual cable is a signed kernel driver. Virtual Audio Cable Lite is free for private, non-commercial use and takes a minute to install." />
                     </StackPanel>
                     <Button Grid.Column="1" Style="{StaticResource GhostButton}" VerticalAlignment="Center"
                             Command="{Binding OpenCableSiteCommand}"
-                            Content="Get VB-Cable" />
+                            Content="Get VAC Lite" />
                 </Grid>
             </Border>
 

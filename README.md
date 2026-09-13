@@ -69,8 +69,14 @@ as you like. It sums whatever arrives, carries its own fader, mute, balance and 
 keeps its own clock so it can feed a 44.1 kHz interface and a 48 kHz headset at the same time.
 
 **Destinations.** Any playback endpoint, including software cables that are already installed.
-VB-Audio Cable, VoiceMeeter, Elgato Virtual Audio and NVIDIA Broadcast are recognised and
-labelled, so you can tell a real speaker from a pipe to another program.
+Virtual Audio Cable, VB-Audio Cable, VoiceMeeter, Elgato Virtual Audio and NVIDIA Broadcast are
+recognised and labelled, so you can tell a real speaker from a pipe to another program.
+
+**A cable of its own.** Setup can install [Virtual Audio Cable Lite](https://vac.muzychenko.net/en/)
+by Eugene Muzychenko, unmodified, and LoopIt7 names it "LoopIt7 Cable". Add cable puts it on any
+page: **In** to hear what a program plays into it, **Out** to send a mix a program records from.
+VAC Lite is free for private, non-commercial use; anyone earning money with it needs a full VAC
+licence from its author.
 
 **Cables.** One source can feed many outputs. One output can sum many sources. Every cable has
 its own trim, mute and alignment delay, because the speaker across the room is further away

@@ -5,40 +5,30 @@
 ; wizard offers an all users install for anyone who wants one.
 
 #define AppName        "LoopIt7"
-#define AppVersion     "1.6.0"
+#define AppVersion     "1.6.1"
 #define AppPublisher   "SeventhSG"
 #define AppUrl         "https://github.com/SeventhSG/LoopIt7"
 #define AppExeName     "LoopIt7.exe"
 #define RuntimeUrl     "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe"
 
-; VB-Audio's cable, bundled only when their redistributable has been placed in
-; installer\cable\. Shipping it needs a distribution agreement from VB-Audio, so the setup
-; is written to build and work identically without it: no file, no task, and the app falls
-; back to sending the user to vb-audio.com itself.
+; The cable is Virtual Audio Cable Lite, by Eugene Muzychenko: one cable, signed by Microsoft,
+; free for private, non-commercial use. Its licence permits distributing the Lite version
+; together with another product, unmodified and not for profit, so build\build.ps1 downloads
+; the official package into installer\cable\vac\, checks its hash, and it goes in as is,
+; licence file included. Without that folder the setup builds and works exactly the same: no
+; task, and the app sends the user to VAC's download page itself.
 ;
-; Setup installs the driver and nothing else. The renaming happens on the app's first run,
-; from the note this script leaves in installed-cable.txt: the endpoints do not exist until
-; the driver's own installer has finished, and the app is the thing that knows how to put
-; every name back when it is uninstalled.
-;
-; The cable is VB-Audio's A+B pack: two cables, A and B, each a separate driver with its own
-; setup. It is the pack rather than their plain cable because far fewer people already have
-; it, so the cables setup adds are almost always new ones LoopIt7 may name, not a cable the
-; user's OBS or Discord already points at. Put the pack's two x64 setups in installer\cable\
-; under these names (rename them if the pack's differ).
-#define CableSetupA    "cable\VBCABLE_A_Setup_x64.exe"
-#define CableSetupB    "cable\VBCABLE_B_Setup_x64.exe"
-; The driver strings the two cables report, and what setup looks for. The plain cable,
-; the C+D pack and VoiceMeeter's VAIO are different drivers that also say VB-Audio, so these
-; are the whole product names and not just the vendor. The app reads them back from
-; installed-cable.txt, separated by '|'.
-#define CableDriverA   "VB-Audio Cable A"
-#define CableDriverB   "VB-Audio Cable B"
-#define CableDriver    CableDriverA + "|" + CableDriverB
-; Bump this whenever the redistributables in installer\cable\ are replaced with newer
-; ones. It is what tells an upgrade that the cables already on the machine are out of date.
-#define CableVersion   "1.0.3.8"
-#if FileExists(AddBackslash(SourcePath) + CableSetupA) && FileExists(AddBackslash(SourcePath) + CableSetupB)
+; VAC's installer has no silent mode, so setup opens it and the user clicks through it, which
+; also shows them VAC's own licence. The renaming happens on the app's first run, from the note
+; this script leaves in installed-cable.txt: the endpoints do not exist until the driver's own
+; installer has finished, and the app is the thing that knows how to put every name back.
+#define CableSetup     "cable\vac\setup.exe"
+; The driver string VAC's endpoints report, and what setup looks for.
+#define CableDriver    "Virtual Audio Cable"
+; Must match the package build.ps1 downloads. It is what tells an upgrade that the cable
+; already on the machine is out of date.
+#define CableVersion   "4.71"
+#if FileExists(AddBackslash(SourcePath) + CableSetup)
   #define BundleCable
 #endif
 
@@ -91,18 +81,19 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Offered whenever this exact cable is missing, even on a machine that already has cables of
 ; another make. Those belong to somebody else's setup, and a cable LoopIt7 may not rename is a
 ; cable that cannot carry the user's own name into Discord.
-Name: "cable"; Description: "Install two virtual audio cables. LoopIt7 names them after itself, and they are what you pick in a DAW, Discord or OBS to play into or record from LoopIt7"; GroupDescription: "Virtual audio cables:"; Check: not CableInstalled
+Name: "cable"; Description: "Install Virtual Audio Cable Lite (free for private, non-commercial use). LoopIt7 names it ""LoopIt7 Cable"", and that is what you pick in a DAW, Discord or OBS to play into or record from LoopIt7"; GroupDescription: "Virtual audio cable:"; Check: not CableInstalled
 ; A cable LoopIt7 installed is LoopIt7's to keep current. Without this the check above
 ; would see a cable present on every later upgrade and quietly skip it forever.
-Name: "cableupdate"; Description: "Update the virtual audio cables LoopIt7 installed"; GroupDescription: "Virtual audio cables:"; Check: OurCableIsOutOfDate
+Name: "cableupdate"; Description: "Update the virtual audio cable LoopIt7 installed"; GroupDescription: "Virtual audio cable:"; Check: OurCableIsOutOfDate
 #endif
 
 [Files]
 Source: "..\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\README.txt"; DestDir: "{app}"; Flags: ignoreversion
 #ifdef BundleCable
-Source: "{#CableSetupA}"; DestDir: "{tmp}"; Flags: deleteafterinstall; Tasks: cable cableupdate
-Source: "{#CableSetupB}"; DestDir: "{tmp}"; Flags: deleteafterinstall; Tasks: cable cableupdate
+; The whole package, folder structure intact: VAC's installer needs its x86, x64, arm64 and
+; tools subfolders beside it.
+Source: "cable\vac\*"; DestDir: "{tmp}\vac"; Flags: recursesubdirs createallsubdirs deleteafterinstall; Tasks: cable cableupdate
 #endif
 
 [Icons]
@@ -111,10 +102,9 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 
 [Run]
 #ifdef BundleCable
-; VB-Audio's installer asks for administrator rights itself, which is why this goes through
-; the shell rather than being run directly: LoopIt7's own setup stays unelevated.
-Filename: "{tmp}\VBCABLE_A_Setup_x64.exe"; Parameters: "-i -h"; StatusMsg: "Installing virtual audio cable A..."; Flags: shellexec waituntilterminated; Tasks: cable cableupdate
-Filename: "{tmp}\VBCABLE_B_Setup_x64.exe"; Parameters: "-i -h"; StatusMsg: "Installing virtual audio cable B..."; Flags: shellexec waituntilterminated; Tasks: cable cableupdate
+; VAC's installer asks for administrator rights itself, which is why this goes through the
+; shell rather than being run directly: LoopIt7's own setup stays unelevated.
+Filename: "{tmp}\vac\setup.exe"; WorkingDir: "{tmp}\vac"; StatusMsg: "Installing Virtual Audio Cable Lite. Follow its installer to finish..."; Flags: shellexec waituntilterminated; Tasks: cable cableupdate
 #endif
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
@@ -188,7 +178,7 @@ begin
   Result := FileExists(Marker) and (OurCableVersion() <> '{#CableVersion}');
 end;
 
-{ Whether either cable of VB-Audio's A+B pack is already on this machine.
+{ Whether Virtual Audio Cable (Lite or full) is already on this machine.
   Deliberately not "any cable at all". Somebody running Wave Link, NVIDIA Broadcast or
   VoiceMeeter has cables, but they are wired into their own setup and are not ours to rename,
   so without one of our own LoopIt7 could never put its name on anything. They get the offer
@@ -209,8 +199,7 @@ begin
     if RegQueryStringValue(HKLM64, RenderEndpoints + '\' + Endpoints[I] + '\Properties',
         InterfaceNameValue, Iface) then
     begin
-      if (Pos(Lowercase('{#CableDriverA}'), Lowercase(Iface)) > 0) or
-         (Pos(Lowercase('{#CableDriverB}'), Lowercase(Iface)) > 0) then
+      if Pos(Lowercase('{#CableDriver}'), Lowercase(Iface)) > 0 then
       begin
         Result := True;
         Exit;

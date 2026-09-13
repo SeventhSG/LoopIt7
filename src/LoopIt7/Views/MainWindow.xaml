@@ -415,7 +415,7 @@
                                     </Style>
                                 </StackPanel.Style>
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="No cable on this machine yet. A cable is a signed driver Windows will not let an ordinary program create; the LoopIt7 installer can add one, or get VB-Audio's free one." />
+                                           Text="No cable on this machine yet. A cable is a signed driver Windows will not let an ordinary program create; the LoopIt7 installer can add one, or get Virtual Audio Cable Lite, which is free for private use." />
                                 <Button Style="{StaticResource GhostButton}" Margin="0,8,0,0"
                                         HorizontalAlignment="Stretch"
                                         Click="OnGetCableClick"

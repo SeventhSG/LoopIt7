@@ -30,10 +30,14 @@ public sealed record CableInlet(AudioDeviceInfo Feed, AudioDeviceInfo Pickup)
 
 public static class VirtualCableService
 {
-    /// <summary>Where to get a cable when the machine has none. VB-Audio's is free.</summary>
-    public const string RecommendedCableUrl = "https://vb-audio.com/Cable/";
+    /// <summary>
+    /// Where to get a cable when the machine has none: Virtual Audio Cable Lite, the one setup
+    /// bundles. Free for private, non-commercial use, and its licence allows handing it out
+    /// unmodified with a free program, so it is the one LoopIt7 recommends.
+    /// </summary>
+    public const string RecommendedCableUrl = "https://vac.muzychenko.net/en/download.htm";
 
-    public const string RecommendedCableName = "VB-Audio Virtual Cable";
+    public const string RecommendedCableName = "Virtual Audio Cable Lite";
 
     /// <summary>
     /// Matched in order, most specific first. VoiceMeeter has to be tested before the plain

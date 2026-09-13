@@ -1468,7 +1468,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _adoptableCable = inlets
             .Where(i => !CableOwnership.IsOwned(_settings, i.Feed))
             .Where(i => VirtualCableService.IsPlainCable(i.Feed))
-            .OrderByDescending(i => VirtualCableService.FamilyOf(i.Feed) == "VB-Audio Cable")
+            .OrderByDescending(i => VirtualCableService.FamilyOf(i.Feed) == "Virtual Audio Cable")
             .FirstOrDefault();
 
         OnPropertyChanged(nameof(OwnCableName));

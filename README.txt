@@ -168,14 +168,18 @@ which end LoopIt7 will open.
 This is the half a DAW wants. Set the DAW's output device to LoopIt7 Cable and
 the DAW is on your canvas, ready to patch to as many outputs as you like.
 
-The same cable can instead be given to a virtual output, with the link button on
-the box, when you want what arrives summed with other programs before it leaves.
+Add cable on the toolbar lists every cable. In puts one on the page as a
+source, Out puts it on the page as an output other programs record from.
 
-If there is no cable on this machine the picker says so and offers to fetch
-one. LoopIt7 recognises VB-Audio Cable, VoiceMeeter, Elgato Virtual Audio and
-NVIDIA Broadcast, and points you at VB-Audio's free cable if you have none:
+Setup can install Virtual Audio Cable Lite by Eugene Muzychenko, unmodified,
+and LoopIt7 names it "LoopIt7 Cable". VAC Lite is free for private,
+non-commercial use; anyone earning money with it needs a full VAC licence from
+its author. If there is no cable on this machine, LoopIt7 points you at it:
 
-    https://vb-audio.com/Cable/
+    https://vac.muzychenko.net/en/download.htm
+
+LoopIt7 also recognises VB-Audio Cable, VoiceMeeter, Elgato Virtual Audio and
+NVIDIA Broadcast.
 
 
 WHAT THE CABLE IS CALLED

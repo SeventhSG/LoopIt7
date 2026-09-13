@@ -70,6 +70,18 @@ public sealed class PatchPreset
 }
 
 /// <summary>
+/// One tab of the patchbay: its own boxes, its own cables, its own layout. Latency is not
+/// part of this, because the WASAPI buffer is a machine setting, not a per patch one.
+/// </summary>
+public sealed class PatchPageSettings
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = "Page 1";
+    public List<NodeSettings> Nodes { get; set; } = [];
+    public List<CableSettings> Cables { get; set; } = [];
+}
+
+/// <summary>
 /// A cable LoopIt7 installed and renamed, and the names it had before, so removing the claim
 /// puts the machine back exactly as it was found. Cables that were already on the machine are
 /// never recorded here, because they are never renamed.
@@ -96,10 +108,20 @@ public sealed class AppSettings
     /// <summary>WASAPI buffer size per endpoint. 3, 5, 10, 20 or 40.</summary>
     public int LatencyMs { get; set; } = 10;
 
+    /// <summary>
+    /// Pre pages, the one canvas this app had. Kept only so a settings file saved before pages
+    /// existed still has something to migrate into "Page 1"; nothing writes here afterwards.
+    /// </summary>
     public List<NodeSettings> Nodes { get; set; } = [];
     public List<CableSettings> Cables { get; set; } = [];
     public List<MidiRouteSettings> MidiRoutes { get; set; } = [];
     public List<PatchPreset> Presets { get; set; } = [];
+
+    /// <summary>The patchbay's tabs, Excel sheet style. Always at least one.</summary>
+    public List<PatchPageSettings> Pages { get; set; } = [];
+
+    /// <summary>Which page was open last.</summary>
+    public string ActivePageId { get; set; } = string.Empty;
 
     /// <summary>Cables LoopIt7 installed, renamed, and must put back if it is removed.</summary>
     public List<CableClaimSettings> ClaimedCables { get; set; } = [];

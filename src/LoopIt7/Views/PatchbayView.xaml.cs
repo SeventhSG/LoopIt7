@@ -266,4 +266,57 @@ public partial class PatchbayView : UserControl
         var existing = _viewModel?.Cables.FirstOrDefault(c => c.Source == source && c.Destination == destination);
         if (existing is not null && _viewModel is not null) _viewModel.SelectedCable = existing;
     }
+
+    // Page strip
+
+    /// <summary>Single click switches to the page; a double click renames it instead.</summary>
+    private void OnPageTabMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: PatchPageViewModel page } || _viewModel is null) return;
+
+        if (e.ClickCount >= 2)
+        {
+            page.IsEditing = true;
+            e.Handled = true;
+            return;
+        }
+
+        _viewModel.SelectedPage = page;
+        e.Handled = true;
+    }
+
+    private void OnPageNameKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: PatchPageViewModel page } box) return;
+
+        if (e.Key == Key.Enter)
+        {
+            box.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            page.IsEditing = false;
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            box.GetBindingExpression(TextBox.TextProperty)?.UpdateTarget();
+            page.IsEditing = false;
+            e.Handled = true;
+        }
+    }
+
+    private void OnPageNameLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: PatchPageViewModel page }) page.IsEditing = false;
+    }
+
+    /// <summary>The box only appears once renaming starts, so it has to be focused by hand.</summary>
+    private void OnPageNameVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (sender is not TextBox { Visibility: Visibility.Visible } box) return;
+
+        box.Dispatcher.BeginInvoke(() =>
+        {
+            box.Focus();
+            box.SelectAll();
+        });
+    }
 }

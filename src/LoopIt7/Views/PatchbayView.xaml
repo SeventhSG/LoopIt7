@@ -359,9 +359,66 @@
             <Setter Property="Canvas.Left" Value="{Binding X}" />
             <Setter Property="Canvas.Top" Value="{Binding Y}" />
         </Style>
+
+        <!--
+            One tab in the page strip. A name and, while it is being renamed, a text box in
+            its place; the delete button only ever does anything once there is a second page,
+            which the command's own CanExecute already enforces.
+        -->
+        <DataTemplate x:Key="PageTab" DataType="{x:Type vm:PatchPageViewModel}">
+            <Border x:Name="Shell" Height="28" Margin="0,0,4,0" Padding="10,0"
+                    CornerRadius="{StaticResource ControlRadius}"
+                    Background="{StaticResource TransparentBrush}"
+                    Cursor="Hand"
+                    MouseLeftButtonDown="OnPageTabMouseDown">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="12"
+                               MaxWidth="150" TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center"
+                               Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}" />
+
+                    <TextBox Grid.Column="0" x:Name="NameBox" Style="{StaticResource LoopTextBox}"
+                              Width="120" Height="22" Padding="6,0" FontSize="12"
+                              Text="{Binding Name, UpdateSourceTrigger=LostFocus}"
+                              Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibility}}"
+                              KeyDown="OnPageNameKeyDown" LostFocus="OnPageNameLostFocus"
+                              IsVisibleChanged="OnPageNameVisibleChanged" />
+
+                    <Button Grid.Column="1" Style="{StaticResource IconButtonDanger}"
+                            Width="18" Height="18" Margin="6,0,0,0"
+                            Command="{Binding DataContext.DeletePageCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                            CommandParameter="{Binding}"
+                            ToolTip="Delete this page" AutomationProperties.Name="Delete this page">
+                        <TextBlock Style="{StaticResource Glyph}" FontSize="8" Text="&#xE711;"
+                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </Button>
+                </Grid>
+            </Border>
+            <DataTemplate.Triggers>
+                <Trigger SourceName="Shell" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Shell" Property="Background" Value="{StaticResource SurfaceHiBrush}" />
+                </Trigger>
+                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                    <Setter TargetName="Shell" Property="Background" Value="{StaticResource SurfaceHiBrush}" />
+                    <Setter TargetName="Shell" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                    <Setter TargetName="Shell" Property="BorderThickness" Value="0,0,0,2" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
     </UserControl.Resources>
 
     <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
         <ScrollViewer x:Name="Scroller"
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
@@ -568,6 +625,39 @@
                     </Button>
                 </StackPanel>
             </StackPanel>
+        </Border>
+        </Grid>
+
+        <!--
+            Page strip. Excel sheet tabs at the bottom: click to switch, double click to
+            rename, the cross to delete, the plus to add a blank one.
+        -->
+        <Border Grid.Row="1" Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0"
+                Padding="10,6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <ItemsControl ItemsSource="{Binding Pages}" ItemTemplate="{StaticResource PageTab}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <Button Grid.Column="1" Style="{StaticResource IconButton}" Width="26" Height="26" Margin="6,0,0,0"
+                        Command="{Binding AddPageCommand}"
+                        ToolTip="Add a page" AutomationProperties.Name="Add a page">
+                    <TextBlock Style="{StaticResource Glyph}" FontSize="11" Text="&#xE710;"
+                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                </Button>
+            </Grid>
         </Border>
     </Grid>
 </UserControl>

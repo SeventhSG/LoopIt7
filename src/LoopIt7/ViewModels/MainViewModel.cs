@@ -1388,7 +1388,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         bool changed = CableOwnership.ObserveCables(_settings, OutputDevices.Concat(InputDevices));
 
-        if (NameOwnCable())
+        bool restored = CableOwnership.RestoreLostNames(_settings, OutputDevices.Concat(InputDevices));
+        if (NameOwnCable() || restored)
         {
             // The endpoints answer to a different name now, and every list in the app is
             // still holding the one they had a second ago. Read them again rather than

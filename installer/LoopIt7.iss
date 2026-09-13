@@ -104,7 +104,10 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 #ifdef BundleCable
 ; VAC's installer asks for administrator rights itself, which is why this goes through the
 ; shell rather than being run directly: LoopIt7's own setup stays unelevated.
-Filename: "{tmp}\vac\setup.exe"; WorkingDir: "{tmp}\vac"; StatusMsg: "Installing Virtual Audio Cable Lite. Follow its installer to finish..."; Flags: shellexec waituntilterminated; Tasks: cable cableupdate
+Filename: "{tmp}\vac\setup.exe"; WorkingDir: "{tmp}\vac"; StatusMsg: "Installing Virtual Audio Cable Lite. Finish its installer, then setup continues..."; Flags: shellexec waituntilterminated; Tasks: cable cableupdate; AfterInstall: WriteCableMarker
+; Setup pauses here until the cable carries LoopIt7's name. The app waits for Windows to create
+; the endpoints, names them through its ownership rules, and writes the name for the last page.
+Filename: "{app}\{#AppExeName}"; Parameters: "--name-cables"; StatusMsg: "Naming the cable LoopIt7 Cable..."; Flags: runhidden waituntilterminated; Tasks: cable cableupdate
 #endif
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
@@ -187,10 +190,24 @@ end;
 function CableInstalled(): Boolean;
 var
   Endpoints: TArrayOfString;
+  Programs: TArrayOfString;
   I: Integer;
   Iface: String;
+  Name: String;
 begin
   Result := False;
+
+  { Once LoopIt7 has named the cable, its endpoints no longer say "Virtual Audio Cable", so the
+    endpoint check below cannot see it. VAC registers itself as an installed program, and that
+    entry keeps its name, so it is checked first. }
+  if RegGetSubkeyNames(HKLM64, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', Programs) then
+    for I := 0 to GetArrayLength(Programs) - 1 do
+      if RegQueryStringValue(HKLM64, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\' + Programs[I],
+          'DisplayName', Name) and (Pos(Lowercase('{#CableDriver}'), Lowercase(Name)) > 0) then
+      begin
+        Result := True;
+        Exit;
+      end;
 
   if not RegGetSubkeyNames(HKLM64, RenderEndpoints, Endpoints) then Exit;
 
@@ -352,24 +369,37 @@ end;
 
 { Tell the app that the cable on this machine is one setup installed. By the time the app
   runs, a cable installed thirty seconds ago and one the user has had for years look exactly
-  alike, and only the first is ours to rename. }
-procedure CurStepChanged(CurStep: TSetupStep);
-#ifdef BundleCable
+  alike, and only the first is ours to rename.
+  Runs as soon as the cable's own installer closes, because the step after it names the cable
+  and needs to know it is ours. }
+procedure WriteCableMarker();
 var
   MarkerDir: String;
-#endif
 begin
-  if CurStep <> ssPostInstall then Exit;
-
-#ifdef BundleCable
-  if not (WizardIsTaskSelected('cable') or WizardIsTaskSelected('cableupdate')) then Exit;
-
   MarkerDir := ExpandConstant('{autoappdata}\LoopIt7');
   if not DirExists(MarkerDir) then
     ForceDirectories(MarkerDir);
 
   SaveStringToFile(MarkerDir + '\installed-cable.txt', '{#CableDriver}' + #13#10 + '{#CableVersion}', False);
-#endif
+end;
+
+{ The last page says whether the cable is ready, and under which name, since that name is
+  what the user now looks for in Discord, OBS or a DAW. The app writes it after naming. }
+procedure CurPageChanged(CurPageID: Integer);
+var
+  Named: AnsiString;
+begin
+  if CurPageID <> wpFinished then Exit;
+  if not (WizardIsTaskSelected('cable') or WizardIsTaskSelected('cableupdate')) then Exit;
+
+  if LoadStringFromFile(ExpandConstant('{userappdata}\LoopIt7\named-cable.txt'), Named) and (Named <> '') then
+    WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
+      'Your virtual cable is installed and named "' + String(Named) + '". Pick it as the output ' +
+      'or microphone in Discord, OBS or your DAW to send audio into or out of LoopIt7.'
+  else
+    WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
+      'The virtual cable could not be named yet. If its installer was cancelled, run this setup ' +
+      'again; otherwise LoopIt7 names it the first time it starts.';
 end;
 
 { Settings and presets live outside the install directory. Removing them is the user's call. }

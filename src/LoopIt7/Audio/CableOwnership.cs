@@ -256,6 +256,36 @@ public static class CableOwnership
         }
     }
 
+    /// <summary>
+    /// Puts LoopIt7's name back on a cable it owns that has lost it. Removing a cable's driver
+    /// and installing it again brings the endpoints back under the same ids with the driver's
+    /// own names, and without this the claim would say "named" forever while every program
+    /// showed "Line 1". Only a cable wearing exactly the name it arrived with is touched, so a
+    /// name the user typed in Windows' own settings is left alone.
+    /// </summary>
+    /// <returns>True when something was renamed, so the caller knows to save and look again.</returns>
+    public static bool RestoreLostNames(AppSettings settings, IEnumerable<AudioDeviceInfo> devices)
+    {
+        var present = devices.ToList();
+        bool renamed = false;
+
+        foreach (var claim in settings.ClaimedCables.ToList())
+        {
+            var render = present.FirstOrDefault(d =>
+                string.Equals(d.Id, claim.RenderEndpointId, StringComparison.OrdinalIgnoreCase));
+            if (render is null) continue;
+
+            var current = EndpointNaming.TryRead(render);
+            if (current is null) continue;
+            if (!string.Equals(current.Name, claim.OriginalRenderName, StringComparison.Ordinal)) continue;
+            if (string.Equals(current.Name, claim.ClaimedName, StringComparison.Ordinal)) continue;
+
+            if (TryRename(settings, claim, claim.ClaimedName, present, out _)) renamed = true;
+        }
+
+        return renamed;
+    }
+
     /// <summary>True when this endpoint is one LoopIt7 installed and renamed.</summary>
     public static bool IsOwned(AppSettings settings, AudioDeviceInfo device) =>
         FindClaim(settings, device) is not null;

@@ -40,6 +40,12 @@ public partial class App : Application
             return;
         }
 
+        if (e.Args.Any(a => string.Equals(a, "--name-cables", StringComparison.OrdinalIgnoreCase)))
+        {
+            Shutdown(NameCables());
+            return;
+        }
+
         if (e.Args.Any(a => string.Equals(a, "--release-cables", StringComparison.OrdinalIgnoreCase)))
         {
             ReleaseCables();
@@ -115,6 +121,88 @@ public partial class App : Application
     /// from. It opens no device and makes no sound.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Setup runs this right after the cable's own installer, so the cable carries LoopIt7's
+    /// name before setup says it is finished, instead of whenever the app first starts.
+    /// <para>
+    /// The same rules as the running app: only a cable setup installed is named, through
+    /// <see cref="Audio.CableOwnership"/>, which writes the old names down so the uninstaller
+    /// can put them back. Windows creates the endpoints a few seconds after the driver's
+    /// installer returns, so this waits for them. The name it gave is written to
+    /// named-cable.txt for setup's last page. Opens no device and makes no sound.
+    /// </para>
+    /// </summary>
+    /// <returns>0 when a cable carries LoopIt7's name, 1 when none could be named.</returns>
+    private static int NameCables()
+    {
+        string report = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LoopIt7", "named-cable.txt");
+
+        try
+        {
+            System.IO.File.Delete(report);
+
+            var settingsService = new Services.SettingsService();
+            var settings = settingsService.Load();
+            using var devices = new Audio.DeviceService();
+
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow <= deadline)
+            {
+                var outputs = devices.GetOutputs();
+                var inputs = devices.GetInputSources();
+
+                // A cable we named once and whose driver was reinstalled: put the name back,
+                // then read the endpoints again so the report below sees it.
+                if (Audio.CableOwnership.RestoreLostNames(settings, outputs.Concat(inputs)))
+                {
+                    settingsService.Save(settings);
+                    continue;
+                }
+
+                bool changed = Audio.CableOwnership.ObserveCables(settings, outputs.Concat(inputs));
+                string? named = null;
+
+                foreach (var inlet in Audio.VirtualCableService.FindInlets(outputs, inputs))
+                {
+                    if (!Audio.CableOwnership.MayNameUnasked(settings, inlet.Feed)) continue;
+                    if (!Audio.CableOwnership.MayNameUnasked(settings, inlet.Pickup)) continue;
+
+                    if (Audio.CableOwnership.FindClaim(settings, inlet.Feed) is { } claim)
+                    {
+                        named ??= claim.ClaimedName;
+                        continue;
+                    }
+
+                    string name = Audio.CableOwnership.DefaultNameFor(settings);
+                    if (Audio.CableOwnership.TryClaim(settings, inlet.Feed, inlet.Pickup, name, out _))
+                    {
+                        named = name;
+                        changed = true;
+                    }
+                }
+
+                if (changed) settingsService.Save(settings);
+
+                if (named is not null)
+                {
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(report)!);
+                    System.IO.File.WriteAllText(report, named);
+                    return 0;
+                }
+
+                Thread.Sleep(1000);
+            }
+
+            return 1;
+        }
+        catch
+        {
+            // Setup must finish either way. The running app names the cable on first start.
+            return 1;
+        }
+    }
+
     private static void ReleaseCables()
     {
         try

@@ -5,7 +5,7 @@
 ; wizard offers an all users install for anyone who wants one.
 
 #define AppName        "LoopIt7"
-#define AppVersion     "1.7.0"
+#define AppVersion     "1.7.1"
 #define AppPublisher   "SeventhSG"
 #define AppUrl         "https://github.com/SeventhSG/LoopIt7"
 #define AppExeName     "LoopIt7.exe"
@@ -144,6 +144,9 @@ const
     Cable" and the like. }
   InterfaceNameValue = '{b3f8fa53-0004-438e-9003-51a46e139bfc},6';
 
+  { DEVICE_STATE_NOTPRESENT in an endpoint's DeviceState value. }
+  DeviceStateNotPresent = $4;
+
 var
   DownloadPage: TDownloadWizardPage;
   InstalledVersion: String;
@@ -198,6 +201,7 @@ var
   I: Integer;
   Iface: String;
   Name: String;
+  State: Cardinal;
 begin
   Result := False;
 
@@ -217,6 +221,12 @@ begin
 
   for I := 0 to GetArrayLength(Endpoints) - 1 do
   begin
+    { Windows keeps an endpoint's key after its driver is uninstalled, marked not present.
+      Counting those would hide the offer from everyone who ever removed the cable. }
+    if RegQueryDWordValue(HKLM64, RenderEndpoints + '\' + Endpoints[I], 'DeviceState', State) and
+        ((State and DeviceStateNotPresent) <> 0) then
+      Continue;
+
     if RegQueryStringValue(HKLM64, RenderEndpoints + '\' + Endpoints[I] + '\Properties',
         InterfaceNameValue, Iface) then
     begin

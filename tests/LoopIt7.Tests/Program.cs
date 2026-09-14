@@ -400,6 +400,39 @@ bool Guard(
         settings.ClaimedCables.Count == 0, $"{settings.ClaimedCables.Count} left");
 }
 
+// The list the uninstaller actually passes: outputs plus input sources, where every playback
+// endpoint turns up twice because its loopback tap carries the same id. That once threw inside
+// the release, the uninstaller swallowed it, and every name stayed on.
+{
+    var settings = new AppSettings();
+    settings.ClaimedCables.Add(new CableClaimSettings
+    {
+        RenderEndpointId = cableIn.Id,
+        CaptureEndpointId = cableOut.Id,
+        ClaimedName = "LoopIt7 Cable",
+        OriginalRenderName = "Line 1",
+        OriginalRenderInterface = "Virtual Audio Cable",
+        OriginalCaptureName = "Line 1",
+        OriginalCaptureInterface = "Virtual Audio Cable"
+    });
+
+    var tapOfCable = new AudioDeviceInfo(cableIn.Id, cableIn.Name, cableIn.InterfaceName, AudioSourceKind.Loopback, false);
+    var tapOfHeadset = new AudioDeviceInfo(headset.Id, headset.Name, headset.InterfaceName, AudioSourceKind.Loopback, true);
+
+    string? error = null;
+    try
+    {
+        CableOwnership.ReleaseAll(settings, [cableIn, headset, cableOut, tapOfCable, tapOfHeadset]);
+    }
+    catch (Exception ex)
+    {
+        error = ex.Message;
+    }
+
+    Check("releasing with loopback taps in the list does not throw", error is null, error ?? string.Empty);
+    Check("and the claim is dropped", settings.ClaimedCables.Count == 0, $"{settings.ClaimedCables.Count} left");
+}
+
 // The empty state somebody with no cable sees. Worth its own check because at any non zero
 // count a binding that does not resolve looks exactly like one that does: both leave the
 // panel collapsed. Only the zero case can tell them apart.

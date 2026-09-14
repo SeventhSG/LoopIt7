@@ -387,7 +387,7 @@ public static class CableOwnership
             return false;
         }
 
-        var byId = devices.ToDictionary(d => d.Id, StringComparer.OrdinalIgnoreCase);
+        var byId = ById(devices);
 
         if (!byId.TryGetValue(claim.RenderEndpointId, out var render) ||
             !byId.TryGetValue(claim.CaptureEndpointId, out var capture))
@@ -475,7 +475,7 @@ public static class CableOwnership
         IEnumerable<AudioDeviceInfo> devices,
         out string? error)
     {
-        var byId = devices.ToDictionary(d => d.Id, StringComparer.OrdinalIgnoreCase);
+        var byId = ById(devices);
 
         string? failure = Restore(byId, claim.RenderEndpointId, claim.OriginalRenderName, claim.OriginalRenderInterface);
         failure ??= Restore(byId, claim.CaptureEndpointId, claim.OriginalCaptureName, claim.OriginalCaptureInterface);
@@ -484,6 +484,22 @@ public static class CableOwnership
 
         error = failure;
         return failure is null;
+    }
+
+    /// <summary>
+    /// Endpoints keyed by id. A loopback source carries the id of the playback endpoint it
+    /// taps, so every caller's list of outputs plus inputs names each playback endpoint twice;
+    /// the loopback copies are left out, and a plain ToDictionary would throw on them.
+    /// </summary>
+    private static Dictionary<string, AudioDeviceInfo> ById(IEnumerable<AudioDeviceInfo> devices)
+    {
+        var byId = new Dictionary<string, AudioDeviceInfo>(StringComparer.OrdinalIgnoreCase);
+        foreach (var device in devices.Where(d => d.Kind != AudioSourceKind.Loopback))
+        {
+            byId.TryAdd(device.Id, device);
+        }
+
+        return byId;
     }
 
     /// <summary>

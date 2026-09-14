@@ -78,13 +78,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 #ifdef BundleCable
-; Offered whenever this exact cable is missing, even on a machine that already has cables of
-; another make. Those belong to somebody else's setup, and a cable LoopIt7 may not rename is a
-; cable that cannot carry the user's own name into Discord.
-Name: "cable"; Description: "Install Virtual Audio Cable Lite (free for private, non-commercial use). LoopIt7 names it ""LoopIt7 Cable"", and that is what you pick in a DAW, Discord or OBS to play into or record from LoopIt7"; GroupDescription: "Virtual audio cable:"; Check: not CableInstalled
-; A cable LoopIt7 installed is LoopIt7's to keep current. Without this the check above
-; would see a cable present on every later upgrade and quietly skip it forever.
-Name: "cableupdate"; Description: "Update the virtual audio cable LoopIt7 installed"; GroupDescription: "Virtual audio cable:"; Check: OurCableIsOutOfDate
+; Always offered. Guessing whether a machine already has the cable went wrong too often: a
+; leftover Programs entry with no device behind it was enough to hide the offer. It starts
+; unticked when a working cable is already here (see CurPageChanged), so an upgrade does not
+; open VAC's installer every time, and the same box brings an out of date cable current.
+Name: "cable"; Description: "Install Virtual Audio Cable Lite (free for private, non-commercial use). LoopIt7 names it ""LoopIt7 Cable"", and that is what you pick in a DAW, Discord or OBS to play into or record from LoopIt7. If you already have Virtual Audio Cable, you can leave this unticked"; GroupDescription: "Virtual audio cable:"
 #endif
 
 [Files]
@@ -93,7 +91,7 @@ Source: "..\README.txt"; DestDir: "{app}"; Flags: ignoreversion
 #ifdef BundleCable
 ; The whole package, folder structure intact: VAC's installer needs its x86, x64, arm64 and
 ; tools subfolders beside it.
-Source: "cable\vac\*"; DestDir: "{tmp}\vac"; Flags: recursesubdirs createallsubdirs deleteafterinstall; Tasks: cable cableupdate
+Source: "cable\vac\*"; DestDir: "{tmp}\vac"; Flags: recursesubdirs createallsubdirs deleteafterinstall; Tasks: cable
 #endif
 
 [Icons]
@@ -105,13 +103,14 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 ; A new cable can become the default playback device, which would send everything the user
 ; plays into the cable instead of their speakers. The defaults are written down first, and the
 ; naming step below puts back any that moved onto the cable.
-Filename: "{app}\{#AppExeName}"; Parameters: "--save-defaults"; StatusMsg: "Preparing the virtual audio cable..."; Flags: runhidden waituntilterminated; Tasks: cable cableupdate
+Filename: "{app}\{#AppExeName}"; Parameters: "--save-defaults"; StatusMsg: "Preparing the virtual audio cable..."; Flags: runhidden waituntilterminated; Tasks: cable
 ; VAC's installer asks for administrator rights itself, which is why this goes through the
 ; shell rather than being run directly: LoopIt7's own setup stays unelevated.
-Filename: "{tmp}\vac\setup.exe"; WorkingDir: "{tmp}\vac"; StatusMsg: "Installing Virtual Audio Cable Lite. Finish its installer, then setup continues..."; Flags: shellexec waituntilterminated; Tasks: cable cableupdate; AfterInstall: WriteCableMarker
+Filename: "{tmp}\vac\setup.exe"; WorkingDir: "{tmp}\vac"; StatusMsg: "Installing Virtual Audio Cable Lite. Finish its installer, then setup continues..."; Flags: shellexec waituntilterminated; Tasks: cable; BeforeInstall: NoteCablesBefore; AfterInstall: WriteCableMarker
 ; Setup pauses here until the cable carries LoopIt7's name. The app waits for Windows to create
 ; the endpoints, names them through its ownership rules, and writes the name for the last page.
-Filename: "{app}\{#AppExeName}"; Parameters: "--name-cables"; StatusMsg: "Naming the cable LoopIt7 Cable..."; Flags: runhidden waituntilterminated; Tasks: cable cableupdate
+; Skipped when the cable is not ours to name: the user's own, or none because VAC was cancelled.
+Filename: "{app}\{#AppExeName}"; Parameters: "--name-cables"; StatusMsg: "Naming the cable LoopIt7 Cable..."; Flags: runhidden waituntilterminated; Tasks: cable; Check: CableIsOurs
 #endif
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
@@ -151,6 +150,13 @@ var
   DownloadPage: TDownloadWizardPage;
   InstalledVersion: String;
 
+  { What the cable step found, so the marker and the last page can tell a cable we installed
+    from one the user already had. }
+  CablesBefore: Integer;
+  MarkerBefore: Boolean;
+  CableIsOursNow: Boolean;
+  CableTaskDefaulted: Boolean;
+
 { The version already on this machine, per user or for all users, or empty when LoopIt7 has
   never been installed here. }
 { The cable version LoopIt7 last installed, from the note setup left beside the settings.
@@ -175,68 +181,63 @@ begin
     Result := Trim(Lines[1]);
 end;
 
-{ Whether the cable LoopIt7 put here is older than the one this setup carries. Only ever true
-  for a cable we installed: one the user had already is not ours to update. }
-function OurCableIsOutOfDate(): Boolean;
-var
-  Marker: String;
+function CableMarkerExists(): Boolean;
 begin
-  Marker := ExpandConstant('{autoappdata}\LoopIt7\installed-cable.txt');
-  if not FileExists(Marker) then
-    Marker := ExpandConstant('{commonappdata}\LoopIt7\installed-cable.txt');
-
-  Result := FileExists(Marker) and (OurCableVersion() <> '{#CableVersion}');
+  Result := FileExists(ExpandConstant('{autoappdata}\LoopIt7\installed-cable.txt')) or
+            FileExists(ExpandConstant('{commonappdata}\LoopIt7\installed-cable.txt'));
 end;
 
-{ Whether Virtual Audio Cable (Lite or full) is already on this machine.
-  Deliberately not "any cable at all". Somebody running Wave Link, NVIDIA Broadcast or
-  VoiceMeeter has cables, but they are wired into their own setup and are not ours to rename,
-  so without one of our own LoopIt7 could never put its name on anything. They get the offer
-  too. The one case to avoid is this exact cable already being here: running its installer
-  again would not add a second, it would hand us the user's own cable to rename. }
-function CableInstalled(): Boolean;
+{ How many playback endpoints that are actually present report a driver containing Text.
+  Counts devices, not Programs entries: a leftover entry with no cable behind it once hid the
+  offer from someone who had no cable at all. }
+function PresentCables(Text: String): Integer;
 var
   Endpoints: TArrayOfString;
-  Programs: TArrayOfString;
   I: Integer;
   Iface: String;
-  Name: String;
   State: Cardinal;
 begin
-  Result := False;
-
-  { Once LoopIt7 has named the cable, its endpoints no longer say "Virtual Audio Cable", so the
-    endpoint check below cannot see it. VAC registers itself as an installed program, and that
-    entry keeps its name, so it is checked first. }
-  if RegGetSubkeyNames(HKLM64, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', Programs) then
-    for I := 0 to GetArrayLength(Programs) - 1 do
-      if RegQueryStringValue(HKLM64, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\' + Programs[I],
-          'DisplayName', Name) and (Pos(Lowercase('{#CableDriver}'), Lowercase(Name)) > 0) then
-      begin
-        Result := True;
-        Exit;
-      end;
-
+  Result := 0;
   if not RegGetSubkeyNames(HKLM64, RenderEndpoints, Endpoints) then Exit;
 
   for I := 0 to GetArrayLength(Endpoints) - 1 do
   begin
-    { Windows keeps an endpoint's key after its driver is uninstalled, marked not present.
-      Counting those would hide the offer from everyone who ever removed the cable. }
+    { Windows keeps an endpoint's key after its driver is uninstalled, marked not present. }
     if RegQueryDWordValue(HKLM64, RenderEndpoints + '\' + Endpoints[I], 'DeviceState', State) and
         ((State and DeviceStateNotPresent) <> 0) then
       Continue;
 
     if RegQueryStringValue(HKLM64, RenderEndpoints + '\' + Endpoints[I] + '\Properties',
-        InterfaceNameValue, Iface) then
-    begin
-      if Pos(Lowercase('{#CableDriver}'), Lowercase(Iface)) > 0 then
-      begin
-        Result := True;
-        Exit;
-      end;
-    end;
+        InterfaceNameValue, Iface) and (Pos(Lowercase(Text), Lowercase(Iface)) > 0) then
+      Result := Result + 1;
   end;
+end;
+
+{ Whether a cable that works is already here: the user's own VAC, or the one LoopIt7 installed,
+  current, and carrying our name (its driver string then reads LoopIt7 rather than VAC's). Only
+  decides whether the box starts ticked; the offer itself is always there. }
+function WorkingCableHere(): Boolean;
+begin
+  Result := (PresentCables('{#CableDriver}') > 0) or
+            ((OurCableVersion() = '{#CableVersion}') and (PresentCables('{#AppName}') > 0));
+end;
+
+{ Runs just before VAC's installer. Whatever VAC device is here now was not put here by this
+  setup, and must not be handed to LoopIt7 to rename. }
+procedure NoteCablesBefore();
+begin
+  CablesBefore := PresentCables('{#CableDriver}');
+  MarkerBefore := CableMarkerExists();
+  CableIsOursNow := False;
+
+  { Written by the naming step. A stale one from an earlier install would make the last page
+    report a name this run never gave. }
+  DeleteFile(ExpandConstant('{userappdata}\LoopIt7\named-cable.txt'));
+end;
+
+function CableIsOurs(): Boolean;
+begin
+  Result := CableIsOursNow;
 end;
 
 function PreviousVersion(): String;
@@ -385,11 +386,33 @@ end;
   runs, a cable installed thirty seconds ago and one the user has had for years look exactly
   alike, and only the first is ours to rename.
   Runs as soon as the cable's own installer closes, because the step after it names the cable
-  and needs to know it is ours. }
+  and needs to know it is ours. Now that the offer is always made, this is where the line is
+  held: the note is only written for a cable that arrived during this setup, or one we already
+  owned. Never for the user's own VAC, and never when VAC's installer was cancelled. }
 procedure WriteCableMarker();
 var
   MarkerDir: String;
+  Waited: Integer;
 begin
+  if not MarkerBefore then
+  begin
+    { A VAC device was already here, so reinstalling VAC over it made nothing ours. }
+    if CablesBefore > 0 then Exit;
+
+    { Windows creates the endpoints a few seconds after the driver's installer returns. }
+    Waited := 0;
+    while (PresentCables('{#CableDriver}') = 0) and (Waited < 30) do
+    begin
+      Sleep(1000);
+      Waited := Waited + 1;
+    end;
+
+    { Still nothing: the installer was cancelled or failed. }
+    if PresentCables('{#CableDriver}') = 0 then Exit;
+  end;
+
+  CableIsOursNow := True;
+
   MarkerDir := ExpandConstant('{autoappdata}\LoopIt7');
   if not DirExists(MarkerDir) then
     ForceDirectories(MarkerDir);
@@ -403,17 +426,39 @@ procedure CurPageChanged(CurPageID: Integer);
 var
   Named: AnsiString;
 begin
+#ifdef BundleCable
+  { The first time the tasks page shows, and only then, so a choice the user makes survives
+    going Back and Next again. Unticked when a working cable is already here, ticked otherwise,
+    whatever an earlier install remembered. }
+  if (CurPageID = wpSelectTasks) and not CableTaskDefaulted then
+  begin
+    CableTaskDefaulted := True;
+    if WorkingCableHere() then
+      WizardSelectTasks('!cable')
+    else
+      WizardSelectTasks('cable');
+  end;
+#endif
+
   if CurPageID <> wpFinished then Exit;
-  if not (WizardIsTaskSelected('cable') or WizardIsTaskSelected('cableupdate')) then Exit;
+  if not WizardIsTaskSelected('cable') then Exit;
 
   if LoadStringFromFile(ExpandConstant('{userappdata}\LoopIt7\named-cable.txt'), Named) and (Named <> '') then
     WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
       'Your virtual cable is installed and named "' + String(Named) + '". Pick it as the output ' +
       'or microphone in Discord, OBS or your DAW to send audio into or out of LoopIt7.'
+  else if (CablesBefore > 0) and not MarkerBefore then
+    WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
+      'Virtual Audio Cable was already on this PC, so LoopIt7 left its name alone, because other ' +
+      'programs may be using it. To name it LoopIt7 Cable, open LoopIt7 and use the Devices page.'
+  else if CableIsOursNow then
+    WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
+      'The virtual cable is installed but could not be named yet. LoopIt7 names it the first ' +
+      'time it starts.'
   else
     WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
-      'The virtual cable could not be named yet. If its installer was cancelled, run this setup ' +
-      'again; otherwise LoopIt7 names it the first time it starts.';
+      'Virtual Audio Cable was not installed. If you cancelled its installer, run this setup ' +
+      'again to get the cable.';
 end;
 
 { Settings and presets live outside the install directory. Removing them is the user's call. }

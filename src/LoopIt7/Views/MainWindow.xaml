@@ -24,6 +24,7 @@
 
     <Window.Resources>
         <views:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+        <views:CountToVisibilityConverter x:Key="CountToVisibility" />
 
         <DataTemplate x:Key="DeviceMenuRow">
             <StackPanel>
@@ -40,6 +41,27 @@
                 <TextBlock Style="{StaticResource Caption}" FontSize="11" Margin="0,2,0,0"
                            Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
             </StackPanel>
+        </DataTemplate>
+
+        <!-- One cable in the Add cable list: its names, then In and Out. -->
+        <DataTemplate x:Key="CableRow">
+            <Grid Margin="10,5,4,5">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource InletMenuRow}"
+                                  VerticalAlignment="Center" />
+                <Button Grid.Column="1" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                        Content="In" Tag="source" Click="OnCableRowClick"
+                        AutomationProperties.Name="Add as a source"
+                        ToolTip="A source box: what programs play into this cable" />
+                <Button Grid.Column="2" Style="{StaticResource GhostButton}" Margin="6,0,0,0"
+                        Content="Out" Tag="destination" Click="OnCableRowClick"
+                        AutomationProperties.Name="Add as an output"
+                        ToolTip="An output box: programs record what you send here" />
+            </Grid>
         </DataTemplate>
 
         <DataTemplate x:Key="ApplicationMenuRow">
@@ -374,33 +396,17 @@
                     </Border.Effect>
                     <ScrollViewer MaxHeight="430" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
-                            <TextBlock Text="Cables" Style="{StaticResource Caption}" Margin="10,6,0,2" />
-                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="10,0,10,6"
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="10,6,10,4"
                                        Text="In: hear what a program plays into the cable. Out: send a mix into it, for a program that records from it." />
 
-                            <ItemsControl ItemsSource="{Binding CableInlets}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Grid Margin="10,5,4,5">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource InletMenuRow}"
-                                                              VerticalAlignment="Center" />
-                                            <Button Grid.Column="1" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                                    Content="In" Tag="source" Click="OnCableRowClick"
-                                                    AutomationProperties.Name="Add as a source"
-                                                    ToolTip="A source box: what programs play into this cable" />
-                                            <Button Grid.Column="2" Style="{StaticResource GhostButton}" Margin="6,0,0,0"
-                                                    Content="Out" Tag="destination" Click="OnCableRowClick"
-                                                    AutomationProperties.Name="Add as an output"
-                                                    ToolTip="An output box: programs record what you send here" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                            <TextBlock Text="LoopIt7 supported cable" Style="{StaticResource Caption}" Margin="10,8,0,2"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Visibility="{Binding LoopIt7Cables.Count, Converter={StaticResource CountToVisibility}}" />
+                            <ItemsControl ItemsSource="{Binding LoopIt7Cables}" ItemTemplate="{StaticResource CableRow}" />
+
+                            <TextBlock Text="Other cables" Style="{StaticResource Caption}" Margin="10,10,0,2"
+                                       Visibility="{Binding OtherCables.Count, Converter={StaticResource CountToVisibility}}" />
+                            <ItemsControl ItemsSource="{Binding OtherCables}" ItemTemplate="{StaticResource CableRow}" />
 
                             <!-- No cable yet. Say so rather than showing an empty list. -->
                             <StackPanel Margin="10,2,10,6">

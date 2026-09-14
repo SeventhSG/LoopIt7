@@ -50,6 +50,11 @@ jobs:
           LOOPIT7_CERT_PASSWORD: ${{ secrets.LOOPIT7_CERT_PASSWORD }}
         run: powershell -ExecutionPolicy Bypass -File build/sign.ps1 -Path publish/LoopIt7.exe
 
+      # Virtual Audio Cable Lite goes into the installer unmodified, as its licence allows.
+      # Downloaded from its author's site and checked against a pinned hash.
+      - name: Fetch the cable
+        run: powershell -ExecutionPolicy Bypass -File build/fetch-cable.ps1
+
       - name: Build the installer
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"

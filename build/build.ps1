@@ -75,27 +75,9 @@ $iscc = Find-Tool @(
 ) 'iscc'
 if (-not $iscc) { throw 'Inno Setup was not found. Install it from https://jrsoftware.org/isdl.php' }
 
-# Virtual Audio Cable Lite goes into the installer unmodified, as its licence requires for
-# redistribution, so it is fetched from the author's own site rather than committed here. The
-# hash pins the exact package: a different file is not something anyone has checked, and the
-# version it carries has to match CableVersion in LoopIt7.iss. Offline, the installer is built
-# without it and the app points people at the download page instead.
+# Virtual Audio Cable Lite, bundled unmodified; see fetch-cable.ps1.
 Write-Host '== cable ==' -ForegroundColor DarkYellow
-$vacUrl    = 'https://software.muzychenko.net/freeware/vac471lite.zip'
-$vacSha256 = '1ED42A7E763BF6237438FB62191AE88B2922F014B37658B29D7801D72C9D5357'
-$vacDir    = Join-Path $root 'installer\cable\vac'
-$vacZip    = Join-Path $env:TEMP 'loopit7-vac471lite.zip'
-try {
-    Invoke-WebRequest $vacUrl -OutFile $vacZip -UseBasicParsing
-    $hash = (Get-FileHash $vacZip -Algorithm SHA256).Hash
-    if ($hash -ne $vacSha256) { throw "hash is $hash, expected $vacSha256" }
-    if (Test-Path $vacDir) { Remove-Item $vacDir -Recurse -Force }
-    Expand-Archive $vacZip $vacDir
-    Write-Host "   VAC Lite 4.71 -> $vacDir" -ForegroundColor Green
-} catch {
-    Write-Host "   VAC Lite not bundled: $_" -ForegroundColor Yellow
-    if (Test-Path $vacDir) { Remove-Item $vacDir -Recurse -Force }
-}
+& powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'fetch-cable.ps1')
 
 New-Item -ItemType Directory -Force $distDir | Out-Null
 & $iscc /Qp (Join-Path $root 'installer\LoopIt7.iss')

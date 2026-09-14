@@ -174,7 +174,7 @@ public partial class App : Application
                         continue;
                     }
 
-                    string name = Audio.CableOwnership.DefaultNameFor(settings);
+                    string name = Audio.CableOwnership.DefaultNameFor(settings, outputs.Concat(inputs));
                     if (Audio.CableOwnership.TryClaim(settings, inlet.Feed, inlet.Pickup, name, out _))
                     {
                         named = name;
@@ -186,6 +186,16 @@ public partial class App : Application
 
                 if (named is not null)
                 {
+                    // Claims on cables that are gone, uninstalled since LoopIt7 named them.
+                    // Their original names cannot be put back on a device that no longer
+                    // exists, and left in place they would hold names the new cable needs.
+                    var present = outputs.Concat(inputs).Select(d => d.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    if (settings.ClaimedCables.RemoveAll(c =>
+                            !present.Contains(c.RenderEndpointId) && !present.Contains(c.CaptureEndpointId)) > 0)
+                    {
+                        settingsService.Save(settings);
+                    }
+
                     System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(report)!);
                     System.IO.File.WriteAllText(report, named);
                     return 0;

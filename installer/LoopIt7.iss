@@ -5,7 +5,7 @@
 ; wizard offers an all users install for anyone who wants one.
 
 #define AppName        "LoopIt7"
-#define AppVersion     "1.6.1"
+#define AppVersion     "1.7.0"
 #define AppPublisher   "SeventhSG"
 #define AppUrl         "https://github.com/SeventhSG/LoopIt7"
 #define AppExeName     "LoopIt7.exe"
@@ -19,9 +19,9 @@
 ; task, and the app sends the user to VAC's download page itself.
 ;
 ; VAC's installer has no silent mode, so setup opens it and the user clicks through it, which
-; also shows them VAC's own licence. The renaming happens on the app's first run, from the note
-; this script leaves in installed-cable.txt: the endpoints do not exist until the driver's own
-; installer has finished, and the app is the thing that knows how to put every name back.
+; also shows them VAC's own licence. Setup then runs LoopIt7 --name-cables, which waits for the
+; endpoints, names them from the note this script leaves in installed-cable.txt, and reports the
+; name for the last page. The app does the naming because it is also what puts every name back.
 #define CableSetup     "cable\vac\setup.exe"
 ; The driver string VAC's endpoints report, and what setup looks for.
 #define CableDriver    "Virtual Audio Cable"

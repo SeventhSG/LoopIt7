@@ -45,9 +45,15 @@ public static class CableOwnership
     /// endpoints called the same thing in Windows' own list is the failure this avoids: the
     /// user picks one of them in their DAW and has no way to tell which.
     /// </summary>
-    public static string DefaultNameFor(AppSettings settings)
+    public static string DefaultNameFor(AppSettings settings, IEnumerable<AudioDeviceInfo>? present = null)
     {
+        // A claim on a cable that has since been uninstalled still sits in the settings, and
+        // must not push the cable that replaced it to "LoopIt7 Cable 2". When the caller says
+        // what is on the machine, only those cables hold a name.
+        var ids = present?.Select(d => d.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         var taken = settings.ClaimedCables
+            .Where(c => ids is null || ids.Contains(c.RenderEndpointId) || ids.Contains(c.CaptureEndpointId))
             .Select(c => c.ClaimedName)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 

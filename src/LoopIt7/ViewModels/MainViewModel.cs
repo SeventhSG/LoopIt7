@@ -173,6 +173,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// model is out of reach, exactly like the application list.
     /// </summary>
     public ObservableCollection<CableInlet> CableInlets { get; } = [];
+
+    /// <summary>The cables LoopIt7 installed and named: the top of the Add cable list.</summary>
+    public ObservableCollection<CableInlet> LoopIt7Cables { get; } = [];
+
+    /// <summary>Every other cable on the machine, listed under the LoopIt7 ones.</summary>
+    public ObservableCollection<CableInlet> OtherCables { get; } = [];
     public ObservableCollection<AudioApplication> Applications { get; } = [];
     public ObservableCollection<DeviceRowViewModel> DeviceRows { get; } = [];
 
@@ -899,7 +905,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (_adoptableCable is not { } inlet) return;
 
         string was = inlet.Feed.Name;
-        string name = CableOwnership.DefaultNameFor(_settings);
+        string name = CableOwnership.DefaultNameFor(_settings, OutputDevices.Concat(InputDevices));
 
         CableOwnership.Adopt(_settings, inlet.Feed, inlet.Pickup);
 
@@ -1115,7 +1121,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (feed is not null && CableOwnership.FindClaim(_settings, feed) is { } claim)
         {
             CableOwnership.TryRename(
-                _settings, claim, CableOwnership.DefaultNameFor(_settings),
+                _settings, claim, CableOwnership.DefaultNameFor(_settings, OutputDevices.Concat(InputDevices)),
                 OutputDevices.Concat(InputDevices), out _);
 
             _settingsService.Save(_settings);
@@ -1443,7 +1449,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (CableOwnership.IsOwned(_settings, inlet.Feed)) continue;
 
             if (CableOwnership.TryClaim(
-                    _settings, inlet.Feed, inlet.Pickup, CableOwnership.DefaultNameFor(_settings), out _))
+                    _settings, inlet.Feed, inlet.Pickup, CableOwnership.DefaultNameFor(_settings, OutputDevices.Concat(InputDevices)), out _))
             {
                 renamed = true;
             }
@@ -1461,6 +1467,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var inlets = CableInlets.ToList();
 
         _ownCable = inlets.FirstOrDefault(i => CableOwnership.IsOwned(_settings, i.Feed));
+
+        // Add cable lists LoopIt7's own cables first, under their own heading: they are the
+        // ones set up for this, and somebody else's Elgato mixes should not bury them.
+        Sync(LoopIt7Cables, [.. inlets.Where(i => CableOwnership.IsOwned(_settings, i.Feed))]);
+        Sync(OtherCables, [.. inlets.Where(i => !CableOwnership.IsOwned(_settings, i.Feed))]);
 
         // Only a cable that is a cable and nothing else. Wave Link's mixes and VoiceMeeter's
         // VAIO are virtual devices too, and each one is part of a program that finds it by the

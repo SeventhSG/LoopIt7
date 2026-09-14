@@ -593,6 +593,43 @@ bool Guard(
         !CableOwnership.MayClaim(pack, installed), "the plain cable became claimable");
 }
 
+// Which way round a device reads. VoiceMeeter and VB-CABLE name their ends from their own side,
+// "Input" for the end you play into, which is a playback device, so the menus have to say what
+// each one does from LoopIt7's side or they look like they are in the wrong list.
+{
+    var vmInput = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{vm-input}", "Voicemeeter Input", "VB-Audio Voicemeeter VAIO",
+        AudioSourceKind.Render, false);
+    var vmOutB1 = new AudioDeviceInfo(
+        "{0.0.1.00000000}.{vm-b1}", "Voicemeeter Out B1", "VB-Audio Voicemeeter VAIO",
+        AudioSourceKind.Capture, false);
+    var speakersTap = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{speakers}", "Speakers", "Realtek(R) Audio", AudioSourceKind.Loopback, true);
+
+    Check("VoiceMeeter's Input reads as somewhere to play into",
+        vmInput.MenuSubtitle == "plays into VoiceMeeter", $"got '{vmInput.MenuSubtitle}'");
+    Check("its Out B1 reads as something to record",
+        vmOutB1.MenuSubtitle == "records what VoiceMeeter sends out", $"got '{vmOutB1.MenuSubtitle}'");
+    Check("a loopback tap says what it records",
+        speakersTap.MenuSubtitle == "what this device is playing", $"got '{speakersTap.MenuSubtitle}'");
+    var headsetMic = new AudioDeviceInfo(
+        "{0.0.1.00000000}.{headset-mic}", "Headset Microphone", "Razer Kraken TE", AudioSourceKind.Capture, false);
+    Check("a real microphone keeps its plain line",
+        headsetMic.MenuSubtitle == "Razer Kraken TE", $"got '{headsetMic.MenuSubtitle}'");
+
+    var vbInput = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{vb-input}", "CABLE Input", "VB-Audio Virtual Cable", AudioSourceKind.Render, false);
+    var vbOutput = new AudioDeviceInfo(
+        "{0.0.1.00000000}.{vb-output}", "CABLE Output", "VB-Audio Virtual Cable", AudioSourceKind.Capture, false);
+    var vbInlet = VirtualCableService.FindInlets([vbInput], [vbOutput]).Single();
+
+    // Add cable offers each end once, the way it is named: Input as a way in, Output as a way out.
+    Check("the In row is the end a program plays into",
+        vbInlet.Title == "CABLE Input", $"got '{vbInlet.Title}'");
+    Check("the Out row is the end a program records from",
+        vbInlet.OutTitle == "CABLE Output", $"got '{vbInlet.OutTitle}'");
+}
+
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "all checks passed" : $"{failures} check(s) failed");
 return failures == 0 ? 0 : 1;

@@ -26,6 +26,19 @@ public sealed record CableInlet(AudioDeviceInfo Feed, AudioDeviceInfo Pickup)
 
     /// <summary>The end of the same cable LoopIt7 opens to hear it.</summary>
     public string Detail => $"LoopIt7 listens on {Pickup.Name}";
+
+    /// <summary>
+    /// Add cable lists a cable twice, once per direction, and names each row after the end the
+    /// other program picks. A way in reads as the end a program plays into ("CABLE Input"), a
+    /// way out as the end a program records from ("CABLE Output"), so an Input is only ever
+    /// offered as a source and an Output only ever as an output.
+    /// </summary>
+    public string InDetail => $"A program plays into this. LoopIt7 listens on {Pickup.Name}";
+
+    /// <summary>What the other program chooses as its microphone.</summary>
+    public string OutTitle => Pickup.Name;
+
+    public string OutDetail => $"A program records from this. LoopIt7 plays into {Feed.Name}";
 }
 
 public static class VirtualCableService

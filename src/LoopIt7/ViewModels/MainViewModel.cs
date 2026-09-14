@@ -686,7 +686,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void AddDestinationFromDescriptor(object? descriptor)
     {
-        if (descriptor is AudioDeviceInfo device) AddDestination(device);
+        switch (descriptor)
+        {
+            case AudioDeviceInfo device:
+                AddDestination(device);
+                break;
+
+            // Plays into the cable's playback end, but reads as the end the other program
+            // records from, the name it is picked by over there. Titled after the playback end
+            // it read as "CABLE Input" sitting among the outputs.
+            case CableInlet inlet:
+                AddDestination(inlet.Feed, titled: inlet.Pickup.Name);
+                break;
+        }
     }
 
     private SourceNodeViewModel AddDeviceSource(AudioDeviceInfo device, bool loopback, NodeSettings? saved = null)
@@ -968,10 +980,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private DestinationNodeViewModel AddDestination(AudioDeviceInfo device, NodeSettings? saved = null)
+    private DestinationNodeViewModel AddDestination(AudioDeviceInfo device, NodeSettings? saved = null, string? titled = null)
     {
         bool virtualCable = VirtualCableService.IsVirtual(device);
-        string title = saved?.Title ?? device.Name;
+        string title = saved?.Title ?? titled ?? device.Name;
         string subtitle = saved?.Subtitle ?? (VirtualCableService.FamilyOf(device) ?? device.InterfaceName);
 
         var vm = new DestinationNodeViewModel(saved?.Id ?? NewId(), title, subtitle, device.Id, virtualCable)

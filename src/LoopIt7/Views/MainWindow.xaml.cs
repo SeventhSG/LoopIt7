@@ -236,7 +236,7 @@ public partial class MainWindow : Window
     {
         if (sender is not System.Windows.Controls.Button { DataContext: Audio.CableInlet inlet } button) return;
 
-        if ((string?)button.Tag == "destination") _viewModel.AddDestinationCommand.Execute(inlet.Feed);
+        if ((string?)button.Tag == "destination") _viewModel.AddDestinationCommand.Execute(inlet);
         else _viewModel.AddSourceCommand.Execute(inlet);
 
         AddCablePopup.IsOpen = false;

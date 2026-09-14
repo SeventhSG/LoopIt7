@@ -30,37 +30,48 @@
             <StackPanel>
                 <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
                 <TextBlock Style="{StaticResource Caption}" FontSize="11" Margin="0,2,0,0"
-                           Text="{Binding Subtitle}" TextTrimming="CharacterEllipsis" />
+                           Text="{Binding MenuSubtitle}" TextTrimming="CharacterEllipsis" />
             </StackPanel>
         </DataTemplate>
 
-        <!-- A way in from the rest of Windows: what to pick over there, and what we listen on. -->
-        <DataTemplate x:Key="InletMenuRow">
-            <StackPanel>
-                <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
-                <TextBlock Style="{StaticResource Caption}" FontSize="11" Margin="0,2,0,0"
-                           Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
-            </StackPanel>
-        </DataTemplate>
-
-        <!-- One cable in the Add cable list: its names, then In and Out. -->
-        <DataTemplate x:Key="CableRow">
+        <!--
+            One cable in the Add cable list, once per direction, each named after the end the
+            other program picks. An Input end is only ever a way in and an Output end only ever
+            a way out, so neither can be added the wrong way round.
+        -->
+        <DataTemplate x:Key="CableInRow">
             <Grid Margin="10,5,4,5">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource InletMenuRow}"
-                                  VerticalAlignment="Center" />
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Style="{StaticResource Caption}" FontSize="11" Margin="0,2,0,0"
+                               Text="{Binding InDetail}" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
                 <Button Grid.Column="1" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
                         Content="In" Tag="source" Click="OnCableRowClick"
                         AutomationProperties.Name="Add as a source"
-                        ToolTip="A source box: what programs play into this cable" />
-                <Button Grid.Column="2" Style="{StaticResource GhostButton}" Margin="6,0,0,0"
+                        ToolTip="A source box: what a program plays into this cable" />
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="CableOutRow">
+            <Grid Margin="10,5,4,5">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="{Binding OutTitle}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Style="{StaticResource Caption}" FontSize="11" Margin="0,2,0,0"
+                               Text="{Binding OutDetail}" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Button Grid.Column="1" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
                         Content="Out" Tag="destination" Click="OnCableRowClick"
                         AutomationProperties.Name="Add as an output"
-                        ToolTip="An output box: programs record what you send here" />
+                        ToolTip="An output box: a program records what you send here" />
             </Grid>
         </DataTemplate>
 
@@ -310,7 +321,7 @@
                     <ScrollViewer MaxHeight="430" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
                             <!-- Cables have their own button now; this list is devices and programs. -->
-                            <TextBlock Text="Inputs" Style="{StaticResource Caption}" Margin="10,6,0,4" />
+                            <TextBlock Text="Recording devices" Style="{StaticResource Caption}" Margin="10,6,0,4" />
                             <ItemsControl ItemsSource="{Binding CaptureDevices}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -323,7 +334,7 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
 
-                            <TextBlock Text="System audio" Style="{StaticResource Caption}" Margin="10,12,0,4" />
+                            <TextBlock Text="What an output is playing" Style="{StaticResource Caption}" Margin="10,12,0,4" />
                             <ItemsControl ItemsSource="{Binding LoopbackDevices}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -367,17 +378,20 @@
                         <DropShadowEffect BlurRadius="24" ShadowDepth="6" Direction="270" Color="#000000" Opacity="0.55" />
                     </Border.Effect>
                     <ScrollViewer MaxHeight="430" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                        <ItemsControl ItemsSource="{Binding OutputDevices}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Button Style="{StaticResource MenuRowButton}"
-                                            Content="{Binding}"
-                                            ContentTemplate="{StaticResource DeviceMenuRow}"
-                                            Click="OnMenuRowClick"
-                                            Tag="destination" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                        <StackPanel>
+                            <TextBlock Text="Playback devices" Style="{StaticResource Caption}" Margin="10,6,0,4" />
+                            <ItemsControl ItemsSource="{Binding OutputDevices}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Style="{StaticResource MenuRowButton}"
+                                                Content="{Binding}"
+                                                ContentTemplate="{StaticResource DeviceMenuRow}"
+                                                Click="OnMenuRowClick"
+                                                Tag="destination" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
                     </ScrollViewer>
                 </Border>
             </Popup>
@@ -396,17 +410,33 @@
                     </Border.Effect>
                     <ScrollViewer MaxHeight="430" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
-                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="10,6,10,4"
-                                       Text="In: hear what a program plays into the cable. Out: send a mix into it, for a program that records from it." />
+                            <StackPanel Visibility="{Binding CableInlets.Count, Converter={StaticResource CountToVisibility}}">
+                                <TextBlock Text="In: hear a program" Style="{StaticResource SectionLabel}" Margin="10,6,0,0" />
+                                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="10,2,10,2"
+                                           Text="Named after what the program plays into." />
 
-                            <TextBlock Text="LoopIt7 supported cable" Style="{StaticResource Caption}" Margin="10,8,0,2"
-                                       Foreground="{StaticResource AccentBrush}"
-                                       Visibility="{Binding LoopIt7Cables.Count, Converter={StaticResource CountToVisibility}}" />
-                            <ItemsControl ItemsSource="{Binding LoopIt7Cables}" ItemTemplate="{StaticResource CableRow}" />
+                                <TextBlock Text="LoopIt7 supported cable" Style="{StaticResource Caption}" Margin="10,8,0,2"
+                                           Foreground="{StaticResource AccentBrush}"
+                                           Visibility="{Binding LoopIt7Cables.Count, Converter={StaticResource CountToVisibility}}" />
+                                <ItemsControl ItemsSource="{Binding LoopIt7Cables}" ItemTemplate="{StaticResource CableInRow}" />
 
-                            <TextBlock Text="Other cables" Style="{StaticResource Caption}" Margin="10,10,0,2"
-                                       Visibility="{Binding OtherCables.Count, Converter={StaticResource CountToVisibility}}" />
-                            <ItemsControl ItemsSource="{Binding OtherCables}" ItemTemplate="{StaticResource CableRow}" />
+                                <TextBlock Text="Other cables" Style="{StaticResource Caption}" Margin="10,10,0,2"
+                                           Visibility="{Binding OtherCables.Count, Converter={StaticResource CountToVisibility}}" />
+                                <ItemsControl ItemsSource="{Binding OtherCables}" ItemTemplate="{StaticResource CableInRow}" />
+
+                                <TextBlock Text="Out: send to a program" Style="{StaticResource SectionLabel}" Margin="10,16,0,0" />
+                                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="10,2,10,2"
+                                           Text="Named after what the program records from." />
+
+                                <TextBlock Text="LoopIt7 supported cable" Style="{StaticResource Caption}" Margin="10,8,0,2"
+                                           Foreground="{StaticResource AccentBrush}"
+                                           Visibility="{Binding LoopIt7Cables.Count, Converter={StaticResource CountToVisibility}}" />
+                                <ItemsControl ItemsSource="{Binding LoopIt7Cables}" ItemTemplate="{StaticResource CableOutRow}" />
+
+                                <TextBlock Text="Other cables" Style="{StaticResource Caption}" Margin="10,10,0,2"
+                                           Visibility="{Binding OtherCables.Count, Converter={StaticResource CountToVisibility}}" />
+                                <ItemsControl ItemsSource="{Binding OtherCables}" ItemTemplate="{StaticResource CableOutRow}" />
+                            </StackPanel>
 
                             <!-- No cable yet. Say so rather than showing an empty list. -->
                             <StackPanel Margin="10,2,10,6">

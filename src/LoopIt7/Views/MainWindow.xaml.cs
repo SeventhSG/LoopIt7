@@ -95,7 +95,7 @@ public partial class MainWindow : Window
 
         var open = new ToolStripMenuItem("Open LoopIt7", null, (_, _) => RestoreWindow());
         _trayRouting = new ToolStripMenuItem("Start routing", null, (_, _) => _viewModel.ToggleRoutingCommand.Execute(null));
-        var mute = new ToolStripMenuItem("Mute all sources", null, (_, _) => _viewModel.ToggleAllSourcesMuted());
+        var mute = new ToolStripMenuItem("Mute all inputs", null, (_, _) => _viewModel.ToggleAllSourcesMuted());
         var quit = new ToolStripMenuItem("Quit", null, (_, _) => ShutDown());
 
         menu.Items.AddRange([open, new ToolStripSeparator(), _trayRouting, mute, new ToolStripSeparator(), quit]);

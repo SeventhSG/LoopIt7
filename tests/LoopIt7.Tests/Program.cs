@@ -593,9 +593,9 @@ bool Guard(
         !CableOwnership.MayClaim(pack, installed), "the plain cable became claimable");
 }
 
-// Which way round a device reads. VoiceMeeter and VB-CABLE name their ends from their own side,
-// "Input" for the end you play into, which is a playback device, so the menus have to say what
-// each one does from LoopIt7's side or they look like they are in the wrong list.
+// Add source and Add output list physical devices only. VoiceMeeter and VB-CABLE name their ends
+// from their own side, "Input" for the end you play into, which is a playback device, and listed
+// among the outputs it read as the wrong way round. Every virtual device goes through Add cable.
 {
     var vmInput = new AudioDeviceInfo(
         "{0.0.0.00000000}.{vm-input}", "Voicemeeter Input", "VB-Audio Voicemeeter VAIO",
@@ -603,17 +603,27 @@ bool Guard(
     var vmOutB1 = new AudioDeviceInfo(
         "{0.0.1.00000000}.{vm-b1}", "Voicemeeter Out B1", "VB-Audio Voicemeeter VAIO",
         AudioSourceKind.Capture, false);
+    var waveLinkSystem = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{wl-system}", "System", "Elgato Virtual Audio", AudioSourceKind.Loopback, false);
     var speakersTap = new AudioDeviceInfo(
         "{0.0.0.00000000}.{speakers}", "Speakers", "Realtek(R) Audio", AudioSourceKind.Loopback, true);
-
-    Check("VoiceMeeter's Input reads as somewhere to play into",
-        vmInput.MenuSubtitle == "plays into VoiceMeeter", $"got '{vmInput.MenuSubtitle}'");
-    Check("its Out B1 reads as something to record",
-        vmOutB1.MenuSubtitle == "records what VoiceMeeter sends out", $"got '{vmOutB1.MenuSubtitle}'");
-    Check("a loopback tap says what it records",
-        speakersTap.MenuSubtitle == "what this device is playing", $"got '{speakersTap.MenuSubtitle}'");
     var headsetMic = new AudioDeviceInfo(
         "{0.0.1.00000000}.{headset-mic}", "Headset Microphone", "Razer Kraken TE", AudioSourceKind.Capture, false);
+
+    Check("VoiceMeeter's Input is kept out of Add output",
+        !VirtualCableService.IsPhysical(vmInput), "it was listed as physical");
+    Check("its Out B1 is kept out of Add source",
+        !VirtualCableService.IsPhysical(vmOutB1), "it was listed as physical");
+    Check("and so is a loopback tap on Wave Link",
+        !VirtualCableService.IsPhysical(waveLinkSystem), "it was listed as physical");
+    Check("a cable of our own is kept out too",
+        !VirtualCableService.IsPhysical(cableIn) && !VirtualCableService.IsPhysical(cableOut), "it was listed as physical");
+    Check("a real microphone, speaker and speaker tap stay in",
+        VirtualCableService.IsPhysical(headsetMic) && VirtualCableService.IsPhysical(headset) &&
+        VirtualCableService.IsPhysical(speakersTap), "one was taken for virtual");
+
+    Check("a loopback tap says what it records",
+        speakersTap.MenuSubtitle == "what this device is playing", $"got '{speakersTap.MenuSubtitle}'");
     Check("a real microphone keeps its plain line",
         headsetMic.MenuSubtitle == "Razer Kraken TE", $"got '{headsetMic.MenuSubtitle}'");
 
@@ -630,6 +640,180 @@ bool Guard(
         vbInlet.OutTitle == "CABLE Output", $"got '{vbInlet.OutTitle}'");
 }
 
+// A device Windows will not open right now still shows in the menus, and says why, so a sound
+// card with nothing plugged in reads as unplugged rather than missing.
+{
+    var realtekSpeakers = new AudioDeviceInfo(
+        "{0.0.0.00000000}.{realtek}", "Speakers", "Realtek(R) Audio", AudioSourceKind.Render, false,
+        Unavailable: "nothing plugged in");
+
+    // Named with its card too: a PC often has two devices called Speakers, one of them live.
+    Check("an unplugged sound card says which card and why",
+        realtekSpeakers.MenuSubtitle == "Realtek(R) Audio · nothing plugged in", $"got '{realtekSpeakers.MenuSubtitle}'");
+    Check("and still counts as a real device",
+        VirtualCableService.IsPhysical(realtekSpeakers), "it was taken for virtual");
+}
+
+// A cable's queue, driven the way a real one is. Packet sizes and spacing as measured on a real
+// machine: 10 ms packets 6 to 14 ms apart from an ordinary device, 3 ms packets 3 to 5 ms apart
+// from a virtual cable in low latency mode, and an output pulling 10 ms every 10 ms on its own
+// clock, which is all most hardware offers. Any sample that comes out as silence after the
+// start is a gap the listener hears as crackle.
+{
+    var format = NAudio.Wave.WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
+
+    (double Trimmed, int Underruns, int GapSamples, int Corrections, double Queue) Run(
+        double writerClock, int seconds, double packetMs, double jitterMs, double pullMs = 10)
+    {
+        var cable = new Connection("c", "s", "d", format);
+        double now = 0;
+        cable.Clock = () => now;
+        var tail = cable.CreateTail(48000);
+        var rng = new Random(7);
+
+        int packetFrames = (int)(48 * packetMs);
+        var packet = new byte[packetFrames * 2 * 4];
+        for (int i = 0; i < packetFrames * 2; i++) BitConverter.TryWriteBytes(packet.AsSpan(i * 4), 0.25f);
+
+        var block = new float[(int)(96 * pullMs)];
+        double interval = packetMs / writerClock;
+        double nextWrite = rng.NextDouble() * jitterMs;
+        double nextRead = 5.0;
+        int written = 0, gaps = 0;
+        bool started = false;
+
+        while (nextRead < seconds * 1000.0)
+        {
+            if (nextWrite <= nextRead)
+            {
+                now = nextWrite;
+                cable.Write(packet, packet.Length, 3);
+                written++;
+                nextWrite = written * interval + rng.NextDouble() * jitterMs;
+            }
+            else
+            {
+                now = nextRead;
+                tail.Read(block, 0, block.Length);
+                if (!started && block[0] != 0f) started = true;
+                if (started) gaps += block.Count(s => s == 0f);
+                nextRead += pullMs;
+            }
+        }
+
+        return (cable.TrimmedMilliseconds, cable.Underruns, gaps, cable.DriftCorrections, cable.SettledQueueMilliseconds);
+    }
+
+    // The last two are what low latency mode runs on a USB headset: 144 sample periods at
+    // both ends, and a shared 10 ms microphone feeding a 3 ms output. Both ran dry on a real
+    // machine under the first version of the reader.
+    foreach (var (name, packetMs, jitterMs, pullMs) in new[]
+    {
+        ("10 ms device", 10.0, 4.0, 10.0),
+        ("3 ms cable", 3.0, 2.0, 10.0),
+        ("3 ms in, 3 ms out", 3.0, 1.0, 3.0),
+        ("10 ms mic, 3 ms out", 10.0, 1.0, 3.0)
+    })
+    {
+        var even = Run(1.0, 60, packetMs, jitterMs, pullMs);
+        Check($"{name}: jitter alone leaves no gaps and throws nothing away",
+            even.GapSamples == 0 && even.Underruns == 0 && even.Trimmed == 0,
+            $"{even.GapSamples} silent samples, {even.Underruns} underruns, {even.Trimmed:0} ms trimmed");
+
+        // What waits in the queue after each pull: one packet and a margin, not a safety buffer.
+        Check($"{name}: the queue settles at one packet and a margin",
+            even.Queue <= packetMs + 3, $"settled at {even.Queue:0.0} ms");
+
+        foreach (double drift in new[] { 1.002, 0.998 })
+        {
+            var run = Run(drift, 60, packetMs, jitterMs, pullMs);
+            Check($"{name}: a clock {(drift > 1 ? "fast" : "slow")} by 0.2% is followed without a gap",
+                run.GapSamples == 0 && run.Underruns == 0 && run.Trimmed == 0 && run.Corrections > 0,
+                $"{run.GapSamples} silent samples, {run.Underruns} underruns, {run.Trimmed:0} ms trimmed, {run.Corrections} corrections, settled {run.Queue:0.0} ms");
+        }
+
+        // A device running at the wrong speed altogether: a Behringer under VoiceMeeter took 8%
+        // less than it was sent on a real machine, and nudging a sample at a time threw away 24
+        // seconds of audio. The resampler has to follow it, allowing at most one catch up while
+        // it learns the speed.
+        foreach (double wrong in new[] { 1.08, 0.92 })
+        {
+            var run = Run(wrong, 60, packetMs, jitterMs, pullMs);
+            Check($"{name}: a device {(wrong > 1 ? "8% slow" : "8% fast")} is followed without cutting audio",
+                run.Trimmed < 150 && run.Underruns <= 1,
+                $"{run.Trimmed:0} ms trimmed, {run.Underruns} underruns, {run.GapSamples} silent samples, settled {run.Queue:0.0} ms");
+        }
+    }
+}
+
+// The runaway guard. A loop through another program is dipped, like pulling a fader down and
+// up, and muted only when it keeps coming back. Music, however loud, is left alone.
+{
+    const int rate = 48000;
+
+    (RunawayGuardSampleProvider Guard, int Trips, float LastSecondPeak) Listen(Func<double, double, float> signal, int seconds)
+    {
+        var noise = new Random(3);
+        var guard = new RunawayGuardSampleProvider(new FuncSource(i => signal(i / 2 / (double)rate, noise.NextDouble() * 2 - 1), rate));
+        int trips = 0;
+        guard.Runaway += (_, _) => trips++;
+
+        var block = new float[960];
+        float lastPeak = 0f;
+        for (int b = 0; b < seconds * 100; b++)
+        {
+            guard.Read(block, 0, block.Length);
+            if (b == (seconds - 1) * 100) lastPeak = 0f;
+            foreach (float s in block) lastPeak = Math.Max(lastPeak, Math.Abs(s));
+        }
+
+        return (guard, trips, lastPeak);
+    }
+
+    // Fizz round a loop at unity gain: every pass adds to what is already going round, so it
+    // climbs steadily until it hits the ceiling, and comes straight back after every dip.
+    var loop = Listen((t, n) => (float)(n * Math.Min(3.0, 0.005 * Math.Pow(2.5, t))), 10);
+    Check("a loop that keeps building is dipped first", loop.Guard.Dips >= 1, $"{loop.Guard.Dips} dips");
+    Check("then muted when it keeps coming back", loop.Guard.Tripped && loop.Trips == 1, $"tripped {loop.Guard.Tripped}, {loop.Trips} trips");
+    Check("and stays silent", loop.LastSecondPeak == 0f, $"still peaking at {loop.LastSecondPeak:0.000}");
+
+    loop.Guard.Rearm();
+    Check("unmuting lets sound through again", !loop.Guard.Tripped, "still tripped after rearming");
+
+    // The same climb, but whatever fed it stopped: one dip clears it and the sound carries on.
+    var cleared = Listen((t, n) => (float)(n * Math.Min(0.5, 0.005 * Math.Pow(2.5, t))), 8);
+    Check("a build-up that stops is dipped and then plays on",
+        cleared.Guard.Dips >= 1 && !cleared.Guard.Tripped && cleared.LastSecondPeak > 0.3f,
+        $"{cleared.Guard.Dips} dips, tripped {cleared.Guard.Tripped}, last second peaks at {cleared.LastSecondPeak:0.00}");
+
+    var tone = Listen((t, _) => (float)(0.9 * Math.Sin(2 * Math.PI * 440 * t)), 10);
+    Check("a loud tone just under full scale plays on", tone.Guard.Dips == 0 && !tone.Guard.Tripped, $"{tone.Guard.Dips} dips");
+
+    var master = Listen((t, _) => (float)(0.97 * Math.Sign(Math.Sin(2 * Math.PI * 110 * t))), 10);
+    Check("a brickwalled master peaking at -0.3 dB plays on", master.Guard.Dips == 0 && !master.Guard.Tripped, $"{master.Guard.Dips} dips");
+
+    var swell = Listen((t, _) => (float)(Math.Min(0.9, 0.05 + 0.85 * t / 4) * Math.Sin(2 * Math.PI * 330 * t)), 6);
+    Check("a four second swell to full volume plays on", swell.Guard.Dips == 0 && !swell.Guard.Tripped, $"{swell.Guard.Dips} dips");
+
+    // A drum pattern getting louder: it climbs, but falls back between hits.
+    var drums = Listen((t, n) => (float)(n * Math.Min(0.9, 0.1 + 0.4 * t) * Math.Exp(-(t % 0.25) * 20)), 6);
+    Check("drums getting louder play on", drums.Guard.Dips == 0 && !drums.Guard.Tripped, $"{drums.Guard.Dips} dips");
+}
+
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "all checks passed" : $"{failures} check(s) failed");
 return failures == 0 ? 0 : 1;
+
+/// <summary>Interleaved stereo float from a function of the interleaved sample index.</summary>
+sealed class FuncSource(Func<int, float> signal, int sampleRate) : NAudio.Wave.ISampleProvider
+{
+    private int _index;
+
+    public NAudio.Wave.WaveFormat WaveFormat { get; } = NAudio.Wave.WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, 2);
+
+    public int Read(float[] buffer, int offset, int count)
+    {
+        for (int i = 0; i < count; i++) buffer[offset + i] = signal(_index++);
+        return count;
+    }
+}

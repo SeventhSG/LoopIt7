@@ -92,6 +92,9 @@ public static class VirtualCableService
     /// </summary>
     public static bool IsVirtual(AudioDeviceInfo device) => FamilyOf(device) is not null;
 
+    /// <summary>A real device: what Add source and Add output list. Cables go through Add cable.</summary>
+    public static bool IsPhysical(AudioDeviceInfo device) => !IsVirtual(device);
+
     /// <summary>The product a cable belongs to, or null when the endpoint is real hardware.</summary>
     public static string? FamilyOf(AudioDeviceInfo device) => Match(device)?.Family;
 

@@ -240,9 +240,13 @@ internal sealed class DeviceSourceNode : SourceNode
 
         try
         {
+            // A recording endpoint opens at its smallest engine period where it has one, 3 ms or
+            // less instead of 10. Loopback taps always follow the engine's own period, and a
+            // device that refuses goes the ordinary way; its buffer gets room for a few packets,
+            // which adds no delay, packets leave it as soon as they land.
             _capture = _loopback
                 ? new WasapiLoopbackCapture(_device)
-                : new WasapiCapture(_device, true, BufferMilliseconds);
+                : TryLowLatency() ?? new WasapiCapture(_device, true, Math.Max(BufferMilliseconds, 40));
 
             _captureFormat = Normalize(_capture.WaveFormat);
             NativeChannels = _captureFormat.Channels;
@@ -291,6 +295,130 @@ internal sealed class DeviceSourceNode : SourceNode
         _captureFormat = null;
         if (Status == NodeStatus.Live) Status = NodeStatus.Idle;
     }
+
+    /// <summary>
+    /// Low latency mode: hold the device exclusively, past the Windows mixer, at its smallest
+    /// period. What it takes to hear yourself while you talk.
+    /// </summary>
+    public bool LowLatencyMode { get; set; }
+
+    /// <summary>What the input got: "exclusive · 144 samples (3.0 ms)", or the shared period.</summary>
+    public string LatencyText { get; private set; } = string.Empty;
+
+    private IWaveIn? TryLowLatency()
+    {
+        // Normal mode and virtual cables take Windows' ordinary 10 ms shared stream. Measured on a
+        // real machine, a 3 ms shared stream on a cable ran dry seven times in sixteen seconds
+        // once another program was recording the cable's other end, because the cable then
+        // moves audio in that program's rhythm. Low latency is for real hardware.
+        if (!LowLatencyMode)
+        {
+            PeriodMilliseconds = 10;
+            LatencyText = "shared · 10 ms";
+            return null;
+        }
+
+        // A cable, in low latency mode: never exclusive, since other programs are wired to it,
+        // but read at its smallest shared period, 3 ms on VAC instead of 10. Reading a cable
+        // fast is safe; it was playing into one fast, while something recorded it, that ran dry.
+        if (IsVirtual(_device, AudioSourceKind.Capture))
+        {
+            try
+            {
+                var shared = new LowLatencyCapture(DeviceId, BufferMilliseconds);
+                PeriodMilliseconds = shared.PeriodMilliseconds;
+                LatencyText = shared.Describe();
+                return shared;
+            }
+            catch
+            {
+                PeriodMilliseconds = 10;
+                LatencyText = "shared · 10 ms";
+                return null;
+            }
+        }
+
+        try
+        {
+            var exclusive = new LowLatencyCapture(DeviceId, BufferMilliseconds, exclusive: true, DeviceFormat(_device));
+            PeriodMilliseconds = exclusive.PeriodMilliseconds;
+            LatencyText = exclusive.Describe();
+            return exclusive;
+        }
+        catch
+        {
+            // Held by another program, or no format in common: shared low latency below.
+        }
+
+        try
+        {
+            var capture = new LowLatencyCapture(DeviceId, BufferMilliseconds);
+            PeriodMilliseconds = capture.PeriodMilliseconds;
+            LatencyText = capture.Describe() + ", exclusive refused";
+            return capture;
+        }
+        catch
+        {
+            PeriodMilliseconds = 10;
+            LatencyText = "shared · 10 ms";
+            return null;
+        }
+    }
+
+    /// <summary>One line for the audio log: what the input got and how its packets arrived.</summary>
+    public string TakeDiagnostics()
+    {
+        string device = $"{SafeName(_device)} [{_captureFormat?.ToString() ?? "no format"}]";
+        if (_capture is LowLatencyCapture fast)
+        {
+            var (packets, maxGap) = fast.TakeStats();
+            return $"{device} {LatencyText}; {packets} packets, longest gap {maxGap:0.0} ms";
+        }
+
+        return _capture is null ? $"{device} not open" : $"{device} {LatencyText} (ordinary capture)";
+    }
+
+    /// <summary>The full Windows name, "Speakers (BEHRINGER USB WDM AUDIO)", for the audio log.</summary>
+    internal static string SafeName(MMDevice? device)
+    {
+        try { return device?.FriendlyName ?? "no device"; }
+        catch { return "device gone"; }
+    }
+
+    /// <summary>True for a virtual cable or a mixer's own device, which low latency leaves shared.</summary>
+    internal static bool IsVirtual(MMDevice? device, AudioSourceKind kind)
+    {
+        if (device is null) return false;
+        try
+        {
+            string name = device.FriendlyName;
+            int paren = name.LastIndexOf(" (", StringComparison.Ordinal);
+            if (paren > 0 && name.EndsWith(')')) name = name[..paren];
+            return VirtualCableService.IsVirtual(new AudioDeviceInfo(device.ID, name, device.DeviceFriendlyName, kind, false));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The format picked in the Sound panel, which exclusive mode tries first.</summary>
+    internal static byte[]? DeviceFormat(MMDevice? device)
+    {
+        try
+        {
+            return device is not null && device.Properties.Contains(PropertyKeys.AudioEngineDeviceFormat)
+                ? device.Properties[PropertyKeys.AudioEngineDeviceFormat].Value as byte[]
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The engine period this input actually runs at, in milliseconds.</summary>
+    public double PeriodMilliseconds { get; private set; } = 10;
 
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
     {

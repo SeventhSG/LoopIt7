@@ -108,6 +108,9 @@ public sealed class AppSettings
     /// <summary>WASAPI buffer size per endpoint. 3, 5, 10, 20 or 40.</summary>
     public int LatencyMs { get; set; } = 10;
 
+    /// <summary>Hold device inputs and outputs exclusively at their smallest period.</summary>
+    public bool LowLatencyMode { get; set; }
+
     /// <summary>
     /// Pre pages, the one canvas this app had. Kept only so a settings file saved before pages
     /// existed still has something to migrate into "Page 1"; nothing writes here afterwards.

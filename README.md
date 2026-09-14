@@ -28,7 +28,7 @@ Free. Open source. About 3 MB.
 2. **Keep "Install Virtual Audio Cable Lite" ticked.** Its own installer opens partway through;
    click through it. Setup waits, then names the cable **LoopIt7 Cable** for you and tells you
    when it is ready.
-3. **Open LoopIt7**, press **Add source** and **Add output**, and drag a cable between them.
+3. **Open LoopIt7**, press **Add input** and **Add output**, and drag a cable between them.
 4. **Turn your volume down**, then press **Start routing**.
 
 That is it. Already have LoopIt7? Run the same setup file: it updates in place and keeps your
@@ -64,14 +64,21 @@ The meters move while it happens, so you always see which cable is carrying what
 
 | Button | What it puts on the page |
 | --- | --- |
-| **Add source** | A microphone, an audio interface input, everything a device is playing, or **one single program** on its own. |
-| **Add output** | Any speaker, headset, interface or virtual cable. |
-| **Add cable** | The **LoopIt7 Cable**, listed at the top. **In** hears what a program plays into it, so a DAW or game lands on your canvas. **Out** sends a mix into it, so Discord or OBS can pick it as a microphone. |
+| **Add input** | Any microphone, audio interface input or sound card input, everything an output is playing, or **one single program** on its own. |
+| **Add output** | Any speaker, headset, interface or sound card output. |
+| **Add cable** | The **LoopIt7 Cable**, listed at the top. **In** hears what a program plays into it, so a DAW or game lands on your canvas. **Out** sends a mix into it, so Discord or OBS can pick it as a microphone. The ⇄ button on a cable box turns it from one into the other. |
 
-Then drag from a source to an output. Every box and every cable has its own **fader, mute,
+Add input and Add output list real devices only, including ones with nothing plugged in yet;
+cables and virtual devices such as VoiceMeeter or Wave Link live under Add cable.
+
+Then drag from an input to an output. Every box and every cable has its own **fader, mute,
 balance and meter**. Cables also get a trim and an alignment delay, because the speaker across
 the room is further away than the one on your desk. Solo a source and everything else drops
 out, like on a real mixing desk.
+
+**Low latency** is the switch next to Buffer. It takes your microphone and outputs directly,
+past the Windows mixer, so you can hear yourself while you talk. Other programs cannot use
+those devices while it runs, so give them your voice through the LoopIt7 Cable.
 
 **Pages** work like sheets in a spreadsheet: keep a streaming setup, a monitoring setup and a
 rehearsal setup side by side and flip between them with the tabs at the bottom.

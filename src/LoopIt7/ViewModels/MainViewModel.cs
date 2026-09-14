@@ -78,6 +78,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _devices = new DeviceService();
         _graph = new AudioGraph(_devices);
         _graph.NodeFailed += OnNodeFailed;
+        _graph.OutputRunaway += OnOutputRunaway;
+        _graph.OutputDipped += OnOutputDipped;
         _devices.DevicesChanged += OnDevicesChanged;
 
         Midi = new MidiViewModel(Persist);
@@ -134,6 +136,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         _latencyMs = _settings.LatencyMs is 3 or 5 or 10 or 20 or 40 ? _settings.LatencyMs : 10;
         _graph.BufferMilliseconds = _latencyMs;
+        _lowLatencyMode = _settings.LowLatencyMode;
+        _graph.LowLatencyMode = _lowLatencyMode;
         _settings.StartWithWindows = StartupService.IsEnabled();
 
         if (Enum.TryParse(_settings.LastTab, out WorkspaceTab savedTab)) _tab = savedTab;
@@ -159,13 +163,26 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>Every possible source endpoint: real inputs plus every output tapped in loopback.</summary>
     public ObservableCollection<AudioDeviceInfo> InputDevices { get; } = [];
 
-    /// <summary>Just the recording endpoints, for the "Inputs" half of the add menu.</summary>
+    /// <summary>Just the recording endpoints.</summary>
     public ObservableCollection<AudioDeviceInfo> CaptureDevices { get; } = [];
 
     /// <summary>Playback endpoints offered as loopback taps.</summary>
     public ObservableCollection<AudioDeviceInfo> LoopbackDevices { get; } = [];
 
     public ObservableCollection<AudioDeviceInfo> OutputDevices { get; } = [];
+
+    /// <summary>
+    /// What Add source and Add output list: physical devices only. Cables and mixer software
+    /// name their ends from their own side ("Voicemeeter Input" is a playback device), which
+    /// read as sitting in the wrong menu, so every virtual device goes through Add cable, where
+    /// each end is offered one way round. The full lists above still feed the feedback guard,
+    /// the templates and cable naming.
+    /// </summary>
+    public ObservableCollection<AudioDeviceInfo> PhysicalCaptureDevices { get; } = [];
+
+    public ObservableCollection<AudioDeviceInfo> PhysicalLoopbackDevices { get; } = [];
+
+    public ObservableCollection<AudioDeviceInfo> PhysicalOutputDevices { get; } = [];
 
     /// <summary>
     /// The ways in to LoopIt7 this machine offers, one per cable end pairing. Kept as its own
@@ -287,6 +304,34 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (_loading) return;
             if (IsRunning) RestartRouting();
             Persist();
+        }
+    }
+
+    private bool _lowLatencyMode;
+
+    /// <summary>
+    /// Hold every device input and output on the page exclusively, at its smallest period, so
+    /// a microphone can be heard back while talking. Switching it while routing restarts the
+    /// streams so it takes effect at once.
+    /// </summary>
+    public bool LowLatencyMode
+    {
+        get => _lowLatencyMode;
+        set
+        {
+            if (!SetProperty(ref _lowLatencyMode, value)) return;
+            _graph.LowLatencyMode = value;
+            Persist();
+
+            if (IsRunning)
+            {
+                StopRouting();
+                StartRouting();
+            }
+
+            Notice = value
+                ? "Low latency mode: devices on this page are held exclusively at their smallest buffer. Other programs cannot use them while routing runs; send your mic to them through LoopIt7 Cable."
+                : "Low latency mode off. Devices are shared with other programs again.";
         }
     }
 
@@ -416,7 +461,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         bool anyAudible = Sources.Any(s => !s.Muted);
         foreach (var source in Sources) source.Muted = anyAudible;
-        Notice = anyAudible ? "All sources muted." : "Sources unmuted.";
+        Notice = anyAudible ? "All inputs muted." : "Inputs unmuted.";
     }
 
     private void ToggleRouting()
@@ -429,7 +474,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (Sources.Count == 0)
         {
-            Notice = "Add a source first.";
+            Notice = "Add an input first.";
             return;
         }
 
@@ -441,7 +486,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         if (Cables.Count == 0)
         {
-            Notice = "Drag a cable from a source to an output.";
+            Notice = "Drag a cable from an input to an output.";
             return;
         }
 
@@ -469,6 +514,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _meterTimer.Stop();
         _retryTimer.Stop();
         IsRunning = false;
+        _nextAudioLog = default;
         _liveNodeCount = 0;
 
         // Anything we took off its own output gets it back the moment routing stops. Leaving
@@ -1018,9 +1064,58 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         node.Y = LaneTop + index * LaneSpacing;
     }
 
+    /// <summary>
+    /// Turns a cable box round: the input that hears what a program plays into the cable
+    /// becomes the output that plays into it for a program to record, or back. It lands where
+    /// the old box was. Its wires do not come along, because every one of them now points the
+    /// wrong way.
+    /// </summary>
+    public void FlipNode(PatchNodeViewModel node)
+    {
+        double x = node.X, y = node.Y;
+        PatchNodeViewModel? flipped = null;
+
+        if (node is SourceNodeViewModel { CanFlip: true } input)
+        {
+            var pickup = InputDevices.FirstOrDefault(d =>
+                d.Kind == AudioSourceKind.Capture && string.Equals(d.Id, input.DeviceId, StringComparison.OrdinalIgnoreCase));
+            var feed = pickup is null ? null : VirtualCableService.FindFeedEndpoints(pickup, OutputDevices).FirstOrDefault();
+            if (pickup is null || feed is null)
+            {
+                Notice = $"{input.Title} cannot be turned round while its cable is not on this machine.";
+                return;
+            }
+
+            RemoveNode(input);
+            flipped = AddDestination(feed, titled: pickup.Name);
+            Notice = $"{flipped.Title} is an output now. LoopIt7 plays into {feed.Name}; pick {pickup.Name} as the microphone in the program that should hear it.";
+        }
+        else if (node is DestinationNodeViewModel { CanFlip: true } output)
+        {
+            var feed = OutputDevices.FirstOrDefault(d => string.Equals(d.Id, output.DeviceId, StringComparison.OrdinalIgnoreCase));
+            var pickup = feed is null ? null : VirtualCableService.FindPickupEndpoints(feed, InputDevices).FirstOrDefault();
+            if (feed is null || pickup is null)
+            {
+                Notice = $"{output.Title} cannot be turned round: its cable has no recording end LoopIt7 can find.";
+                return;
+            }
+
+            RemoveNode(output);
+            flipped = AddVirtualInput(new CableInlet(feed, pickup));
+            Notice = $"{flipped.Title} is an input now. {InletHintFor(feed)}";
+        }
+
+        if (flipped is null) return;
+
+        flipped.X = x;
+        flipped.Y = y;
+        Persist();
+    }
+
     private void WireNode(PatchNodeViewModel node)
     {
         node.RemoveRequested += (_, _) => RemoveNode(node);
+        node.FlipRequested += (_, _) => FlipNode(node);
 
         if (node is SourceNodeViewModel { SupportsExclusive: true } program)
         {
@@ -1435,6 +1530,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         SyncDevices(CaptureDevices, [.. sources.Where(d => d.Kind == AudioSourceKind.Capture)]);
         SyncDevices(LoopbackDevices, [.. sources.Where(d => d.Kind == AudioSourceKind.Loopback)]);
         SyncDevices(OutputDevices, _devices.GetOutputs());
+        // Every real device, the ones Windows will not open right now last and marked why.
+        SyncDevices(PhysicalCaptureDevices,
+        [
+            .. CaptureDevices.Where(VirtualCableService.IsPhysical),
+            .. _devices.GetUnavailable(NAudio.CoreAudioApi.DataFlow.Capture).Where(VirtualCableService.IsPhysical)
+        ]);
+        SyncDevices(PhysicalLoopbackDevices, [.. LoopbackDevices.Where(VirtualCableService.IsPhysical)]);
+        SyncDevices(PhysicalOutputDevices,
+        [
+            .. OutputDevices.Where(VirtualCableService.IsPhysical),
+            .. _devices.GetUnavailable(NAudio.CoreAudioApi.DataFlow.Render).Where(VirtualCableService.IsPhysical)
+        ]);
         Sync(CableInlets, VirtualCableService.FindInlets(OutputDevices, InputDevices));
         OnPropertyChanged(nameof(HasVirtualCable));
     }
@@ -1571,16 +1678,69 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _graph.RetryPending();
     });
 
+    /// <summary>
+    /// An output silenced itself because its level ran away. The engine has already cut the
+    /// sound; muting the box is what puts it on screen and makes unmuting the one way back,
+    /// once the loop outside LoopIt7 has been broken. No retry: that would reopen the loop.
+    /// </summary>
+    private void OnOutputRunaway(object? sender, GraphErrorEventArgs e) => _dispatcher.BeginInvoke(() =>
+    {
+        var node = Destinations.FirstOrDefault(n => n.Id == e.NodeId);
+        if (node is null) return;
+
+        node.Muted = true;
+        Notice = $"{node.Title} was {e.Message}";
+    });
+
+    /// <summary>An output dipped itself to drain a loop and came straight back. Just say so.</summary>
+    private void OnOutputDipped(object? sender, GraphErrorEventArgs e) => _dispatcher.BeginInvoke(() =>
+    {
+        var node = Destinations.FirstOrDefault(n => n.Id == e.NodeId);
+        if (node is not null) Notice = $"{node.Title} {e.Message}";
+    });
+
     // Metering
+
+    private static string AudioLogPath => System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LoopIt7", "audio-log.txt");
+
+    private DateTime _nextAudioLog;
+
+    /// <summary>
+    /// Every two seconds while routing: what each device stream got and the counters behind a
+    /// stutter. Started fresh on every Start routing, so it only ever holds the current run.
+    /// </summary>
+    private void WriteAudioLog(bool fresh)
+    {
+        try
+        {
+            string text = $"{DateTime.Now:HH:mm:ss.fff} buffer {LatencyMs} ms, low latency {(LowLatencyMode ? "on" : "off")}{Environment.NewLine}" +
+                          _graph.TakeDiagnostics() + Environment.NewLine;
+
+            if (fresh) System.IO.File.WriteAllText(AudioLogPath, text);
+            else System.IO.File.AppendAllText(AudioLogPath, text);
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            // A log that cannot be written is not worth interrupting the audio for.
+        }
+    }
 
     private void OnMeterTick(object? sender, EventArgs e)
     {
+        if (DateTime.UtcNow >= _nextAudioLog)
+        {
+            bool fresh = _nextAudioLog == default;
+            _nextAudioLog = DateTime.UtcNow.AddSeconds(2);
+            WriteAudioLog(fresh);
+        }
+
         int live = 0;
 
         foreach (var source in Sources)
         {
             var status = _graph.GetSourceStatus(source.Id, out string? detail, out string? hint, out int rate, out int channels);
-            source.ApplyStatus(status, detail, hint, rate, channels);
+            source.ApplyStatus(status, detail, hint, rate, channels, _graph.GetLatencyText(source.Id));
             source.Peak = status == NodeStatus.Live ? _graph.ReadSourcePeak(source.Id) : 0;
             if (status == NodeStatus.Live) live++;
 
@@ -1603,7 +1763,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         foreach (var destination in Destinations)
         {
             var status = _graph.GetDestinationStatus(destination.Id, out string? detail, out string? hint, out int rate, out int channels);
-            destination.ApplyStatus(status, detail, hint, rate, channels);
+            destination.ApplyStatus(status, detail, hint, rate, channels, _graph.GetLatencyText(destination.Id));
             destination.Peak = status == NodeStatus.Live ? _graph.ReadDestinationPeak(destination.Id) : 0;
             if (status == NodeStatus.Live) live++;
         }
@@ -1639,7 +1799,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             ? $"{Describe(VirtualOutputs.Count, "virtual output")} · "
             : string.Empty;
 
-        StatusText = $"Live · {Describe(liveSources, "source")} · {Describe(Cables.Count, "cable")} · " +
+        StatusText = $"Live · {Describe(liveSources, "input")} · {Describe(Cables.Count, "cable")} · " +
                      $"{buses}{Describe(liveDestinations, "output")} · {LatencyMs} ms buffer";
     }
 
@@ -1891,6 +2051,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (_loading || _disposed) return;
 
         _settings.LatencyMs = LatencyMs;
+        _settings.LowLatencyMode = LowLatencyMode;
 
         if (_settings.Pages.FirstOrDefault(p => p.Id == _settings.ActivePageId) is { } active)
         {
@@ -1944,6 +2105,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         _devices.DevicesChanged -= OnDevicesChanged;
         _graph.NodeFailed -= OnNodeFailed;
+        _graph.OutputRunaway -= OnOutputRunaway;
+        _graph.OutputDipped -= OnOutputDipped;
 
         Midi.Dispose();
         _graph.Dispose();

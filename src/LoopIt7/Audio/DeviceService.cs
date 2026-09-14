@@ -67,6 +67,32 @@ public sealed class DeviceService : IDisposable, IMMNotificationClient
     }
 
     /// <summary>
+    /// Devices Windows knows but will not open right now: a sound card jack with nothing
+    /// plugged in, or a device switched off in the Sound panel. Windows hides them from its own
+    /// lists, which reads as the sound card having vanished, so the menus show them with the
+    /// reason. A box made from one waits, and starts the moment the device comes back.
+    /// </summary>
+    public IReadOnlyList<AudioDeviceInfo> GetUnavailable(DataFlow flow)
+    {
+        var list = new List<AudioDeviceInfo>();
+        try
+        {
+            foreach (var device in _enumerator.EnumerateAudioEndPoints(flow, DeviceState.Unplugged | DeviceState.Disabled))
+            {
+                string reason = device.State == DeviceState.Unplugged ? "nothing plugged in" : "disabled in Windows";
+                var kind = flow == DataFlow.Capture ? AudioSourceKind.Capture : AudioSourceKind.Render;
+                list.Add(Describe(device, kind, false) with { Unavailable = reason });
+            }
+        }
+        catch
+        {
+            // An enumeration that fails lists nothing extra, which is where we started.
+        }
+
+        return list;
+    }
+
+    /// <summary>
     /// Resolves an endpoint id to a live device. Returns null when the device is gone
     /// or currently disabled, which is a normal condition, not an error.
     /// </summary>

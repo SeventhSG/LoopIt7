@@ -52,8 +52,8 @@
                 </StackPanel>
                 <Button Grid.Column="1" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
                         Content="In" Tag="source" Click="OnCableRowClick"
-                        AutomationProperties.Name="Add as a source"
-                        ToolTip="A source box: what a program plays into this cable" />
+                        AutomationProperties.Name="Add as an input"
+                        ToolTip="An input box: what a program plays into this cable" />
             </Grid>
         </DataTemplate>
 
@@ -160,12 +160,12 @@
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                             Visibility="{Binding IsPatchbayTab, Converter={StaticResource BoolToVisibility}}">
-                    <Button x:Name="AddSourceButton" Style="{StaticResource GhostButton}" Click="OnAddSourceClick" AutomationProperties.Name="Add source"
-                            ToolTip="A microphone, a playback device tapped in loopback, or a single program">
+                    <Button x:Name="AddSourceButton" Style="{StaticResource GhostButton}" Click="OnAddSourceClick" AutomationProperties.Name="Add input"
+                            ToolTip="A microphone or other input device, what an output is playing, or a single program">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Glyph}" FontSize="11" Text="&#xE710;"
                                        Foreground="{StaticResource AccentBrush}" />
-                            <TextBlock Text="Add source" Margin="8,0,0,0" />
+                            <TextBlock Text="Add input" Margin="8,0,0,0" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="AddOutputButton" Style="{StaticResource GhostButton}" Margin="6,0,0,0"
@@ -272,13 +272,20 @@
                         <Button Style="{StaticResource GhostButton}" Height="32" Margin="0,0,12,0"
                                 Command="{Binding ClearSoloCommand}"
                                 Visibility="{Binding IsSoloing, Converter={StaticResource BoolToVisibility}}"
-                                ToolTip="Bring every source back">
+                                ToolTip="Bring every input back">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="S" FontSize="11" FontWeight="SemiBold"
                                            Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" />
                                 <TextBlock Text="Clear solo" Margin="8,0,0,0" VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
+
+                        <!-- Hear yourself while you talk: devices held exclusively at their smallest buffer -->
+                        <CheckBox Style="{StaticResource ToggleSwitch}" Content="Low latency"
+                                  VerticalAlignment="Center" Margin="0,0,16,0"
+                                  IsChecked="{Binding LowLatencyMode}"
+                                  AutomationProperties.Name="Low latency mode"
+                                  ToolTip="Holds the microphones and outputs on this page exclusively at their smallest buffer, past the Windows mixer, so you can hear yourself while you talk. Other programs cannot use those devices while routing runs; give them your mic through LoopIt7 Cable." />
 
                         <TextBlock Text="Buffer" Style="{StaticResource Caption}" VerticalAlignment="Center"
                                    Margin="0,0,8,0" />
@@ -321,8 +328,8 @@
                     <ScrollViewer MaxHeight="430" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
                             <!-- Cables have their own button now; this list is devices and programs. -->
-                            <TextBlock Text="Recording devices" Style="{StaticResource Caption}" Margin="10,6,0,4" />
-                            <ItemsControl ItemsSource="{Binding CaptureDevices}">
+                            <TextBlock Text="Input devices" Style="{StaticResource Caption}" Margin="10,6,0,4" />
+                            <ItemsControl ItemsSource="{Binding PhysicalCaptureDevices}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Button Style="{StaticResource MenuRowButton}"
@@ -335,7 +342,7 @@
                             </ItemsControl>
 
                             <TextBlock Text="What an output is playing" Style="{StaticResource Caption}" Margin="10,12,0,4" />
-                            <ItemsControl ItemsSource="{Binding LoopbackDevices}">
+                            <ItemsControl ItemsSource="{Binding PhysicalLoopbackDevices}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Button Style="{StaticResource MenuRowButton}"
@@ -362,6 +369,9 @@
 
                             <TextBlock Style="{StaticResource Caption}" Margin="10,4,10,8" TextWrapping="Wrap"
                                        Text="Only programs Windows currently lists as playing appear here. Start playback first, then reopen this menu." />
+
+                            <TextBlock Style="{StaticResource Caption}" Margin="10,0,10,8" TextWrapping="Wrap"
+                                       Text="Cables and virtual devices, like VoiceMeeter or Wave Link, are under Add cable." />
                         </StackPanel>
                     </ScrollViewer>
                 </Border>
@@ -379,8 +389,8 @@
                     </Border.Effect>
                     <ScrollViewer MaxHeight="430" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
-                            <TextBlock Text="Playback devices" Style="{StaticResource Caption}" Margin="10,6,0,4" />
-                            <ItemsControl ItemsSource="{Binding OutputDevices}">
+                            <TextBlock Text="Output devices" Style="{StaticResource Caption}" Margin="10,6,0,4" />
+                            <ItemsControl ItemsSource="{Binding PhysicalOutputDevices}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Button Style="{StaticResource MenuRowButton}"
@@ -391,6 +401,9 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+
+                            <TextBlock Style="{StaticResource Caption}" Margin="10,8,10,6" TextWrapping="Wrap"
+                                       Text="Cables and virtual devices, like VoiceMeeter or Wave Link, are under Add cable." />
                         </StackPanel>
                     </ScrollViewer>
                 </Border>
@@ -547,7 +560,7 @@
                         <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
                                    Text="{Binding HotkeyText}" />
                         <TextBlock Style="{StaticResource Caption}" Margin="0,2,0,0" TextWrapping="Wrap"
-                                   Text="Mutes every source at once, from anywhere." />
+                                   Text="Mutes every input at once, from anywhere." />
 
                         <Border Height="1" Background="{StaticResource LineBrush}" Margin="0,12" />
 

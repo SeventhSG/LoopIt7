@@ -37,8 +37,64 @@ public sealed class AudioGraph : IDisposable
     /// <summary>WASAPI buffer per endpoint, in milliseconds. Applied on the next start.</summary>
     public int BufferMilliseconds { get; set; } = 10;
 
+    /// <summary>
+    /// Hold device inputs and outputs exclusively at their smallest period, so a microphone can
+    /// be heard back while talking. Applied on the next start.
+    /// </summary>
+    public bool LowLatencyMode { get; set; }
+
+    private DateTime _lastDiagnostics = DateTime.UtcNow;
+
+    /// <summary>
+    /// The counters behind a stutter, one line per device and cable, reset on every call. What
+    /// the audio log writes while routing runs.
+    /// </summary>
+    public string TakeDiagnostics()
+    {
+        lock (_sync)
+        {
+            var lines = new List<string>();
+            foreach (var source in _sources.Values.OfType<DeviceSourceNode>())
+                lines.Add($"  in  {source.DisplayName}: {source.TakeDiagnostics()}");
+            foreach (var destination in _destinations.Values)
+                lines.Add($"  out {destination.DisplayName}: {destination.TakeDiagnostics()}");
+            foreach (var c in _connections.Values)
+            {
+                string from = _sources.TryGetValue(c.SourceId, out var s) ? s.DisplayName : c.SourceId;
+                string to = _destinations.TryGetValue(c.DestinationId, out var d) ? d.DisplayName : c.DestinationId;
+                var (framesIn, framesOut) = c.TakeRates();
+                double seconds = Math.Max(0.001, (DateTime.UtcNow - _lastDiagnostics).TotalSeconds);
+                lines.Add($"  cable {from} to {to}: arrived {framesIn / seconds:0} frames/s, taken {framesOut / seconds:0} frames/s at the source's {c.SourceSampleRate} Hz; queue {c.QueuedMilliseconds:0.0} ms, settled {c.SettledQueueMilliseconds:0.0} ms, {c.Underruns} underruns, {c.DriftCorrections} drift corrections, {c.TrimmedMilliseconds:0} ms trimmed (totals)");
+            }
+
+            _lastDiagnostics = DateTime.UtcNow;
+
+            return string.Join(Environment.NewLine, lines);
+        }
+    }
+
+    /// <summary>What a node's device stream got, for its box. Empty for anything else.</summary>
+    public string GetLatencyText(string id)
+    {
+        lock (_sync)
+        {
+            if (_sources.TryGetValue(id, out var source) && source is DeviceSourceNode device) return device.LatencyText;
+            if (_destinations.TryGetValue(id, out var destination)) return destination.LatencyText;
+            return string.Empty;
+        }
+    }
+
     /// <summary>Raised off the UI thread when a node fails on its own and wants a retry.</summary>
     public event EventHandler<GraphErrorEventArgs>? NodeFailed;
+
+    /// <summary>
+    /// Raised off the UI thread when an output silenced itself because its level ran away.
+    /// Not a failure: the output stays open and silent, and must not be retried.
+    /// </summary>
+    public event EventHandler<GraphErrorEventArgs>? OutputRunaway;
+
+    /// <summary>Raised off the UI thread when an output dipped itself to drain a loop.</summary>
+    public event EventHandler<GraphErrorEventArgs>? OutputDipped;
 
     // Building the graph
 
@@ -50,6 +106,7 @@ public sealed class AudioGraph : IDisposable
             var node = new DeviceSourceNode(id, displayName, deviceId, loopback, _devices)
             {
                 BufferMilliseconds = BufferMilliseconds,
+                LowLatencyMode = LowLatencyMode,
                 TargetQueueMilliseconds = TargetQueue
             };
 
@@ -105,10 +162,13 @@ public sealed class AudioGraph : IDisposable
             RemoveNodeCore(id);
             var node = new DestinationNode(id, displayName, deviceId, _devices)
             {
-                BufferMilliseconds = BufferMilliseconds
+                BufferMilliseconds = BufferMilliseconds,
+                LowLatencyMode = LowLatencyMode
             };
 
             node.Failed += OnNodeFailed;
+            node.Runaway += OnOutputRunaway;
+            node.Dipped += OnOutputDipped;
             _destinations[id] = node;
 
             if (IsRunning)
@@ -173,7 +233,7 @@ public sealed class AudioGraph : IDisposable
 
             if (_sources.Count == 0)
             {
-                error = "Add a source first.";
+                error = "Add an input first.";
                 return false;
             }
 
@@ -185,7 +245,12 @@ public sealed class AudioGraph : IDisposable
 
             foreach (var source in _sources.Values)
             {
-                if (source is DeviceSourceNode device) device.BufferMilliseconds = BufferMilliseconds;
+                if (source is DeviceSourceNode device)
+                {
+                    device.BufferMilliseconds = BufferMilliseconds;
+                    device.LowLatencyMode = LowLatencyMode;
+                }
+
                 if (source is BusNode bus) bus.BlockMilliseconds = BufferMilliseconds;
                 source.TargetQueueMilliseconds = TargetQueue;
                 source.Start(out _);
@@ -210,6 +275,7 @@ public sealed class AudioGraph : IDisposable
             foreach (var destination in _destinations.Values)
             {
                 destination.BufferMilliseconds = BufferMilliseconds;
+                destination.LowLatencyMode = LowLatencyMode;
                 RewireDestination(destination);
                 destination.Start(out _);
             }
@@ -358,12 +424,21 @@ public sealed class AudioGraph : IDisposable
 
     // Internals
 
-    /// <summary>Headroom the cables are allowed to build up, scaled off the buffer setting.</summary>
-    private int TargetQueue => Math.Max(20, BufferMilliseconds * 3);
+    /// <summary>
+    /// A floor for what a cable queues, from the buffer setting. The cable works out its real
+    /// need from packet and pull sizes and follows clock drift itself, so this no longer has
+    /// to carry a safety margin of its own.
+    /// </summary>
+    private int TargetQueue => BufferMilliseconds;
 
     private bool StartSource(SourceNode source)
     {
-        if (source is DeviceSourceNode device) device.BufferMilliseconds = BufferMilliseconds;
+        if (source is DeviceSourceNode device)
+        {
+            device.BufferMilliseconds = BufferMilliseconds;
+            device.LowLatencyMode = LowLatencyMode;
+        }
+
         source.TargetQueueMilliseconds = TargetQueue;
 
         if (!source.Start(out _)) return false;
@@ -464,11 +539,17 @@ public sealed class AudioGraph : IDisposable
         if (_destinations.Remove(nodeId, out var destination))
         {
             destination.Failed -= OnNodeFailed;
+            destination.Runaway -= OnOutputRunaway;
+            destination.Dipped -= OnOutputDipped;
             destination.Dispose();
         }
     }
 
     private void OnNodeFailed(object? sender, GraphErrorEventArgs e) => NodeFailed?.Invoke(this, e);
+
+    private void OnOutputRunaway(object? sender, GraphErrorEventArgs e) => OutputRunaway?.Invoke(this, e);
+
+    private void OnOutputDipped(object? sender, GraphErrorEventArgs e) => OutputDipped?.Invoke(this, e);
 
     private void StopCore()
     {
@@ -495,6 +576,8 @@ public sealed class AudioGraph : IDisposable
             foreach (var destination in _destinations.Values)
             {
                 destination.Failed -= OnNodeFailed;
+                destination.Runaway -= OnOutputRunaway;
+                destination.Dipped -= OnOutputDipped;
                 destination.Dispose();
             }
 

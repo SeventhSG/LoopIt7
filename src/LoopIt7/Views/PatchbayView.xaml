@@ -85,6 +85,16 @@
                                               Visibility="{Binding SupportsExclusive, Converter={StaticResource BoolToVisibility}}"
                                               ToolTip="Take this program off its own output, so you only hear it where LoopIt7 sends it"
                                               AutomationProperties.Name="Only through LoopIt7" />
+
+                                <!-- Turn a cable box round: input to output, output to input -->
+                                <Button Style="{StaticResource IconButton}" Width="20" Height="20" Margin="0,0,4,0"
+                                        Command="{Binding FlipCommand}"
+                                        Visibility="{Binding CanFlip, Converter={StaticResource BoolToVisibility}}"
+                                        ToolTip="Turn this cable round: an input becomes the output that plays into the same cable, and back"
+                                        AutomationProperties.Name="Turn this cable round">
+                                    <TextBlock Style="{StaticResource Glyph}" FontSize="10" Text="&#xE8AB;"
+                                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                </Button>
                             </StackPanel>
 
                             <Button Grid.Column="3" Style="{StaticResource IconButtonDanger}"
@@ -607,7 +617,7 @@
                            HorizontalAlignment="Center" Margin="0,14,0,0" />
                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextAlignment="Center"
                            Margin="0,8,0,0"
-                           Text="Add a source and an output, then drag a cable between them. Add cable puts a LoopIt7 cable on the page, for audio to and from other programs." />
+                           Text="Add an input and an output, then drag a cable between them. Add cable puts a LoopIt7 cable on the page, for audio to and from other programs." />
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
                     <Button Style="{StaticResource GhostButton}" Height="36" Padding="16,0"

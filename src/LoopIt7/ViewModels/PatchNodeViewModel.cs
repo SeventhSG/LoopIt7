@@ -37,6 +37,7 @@ public abstract class PatchNodeViewModel : ObservableObject
         _subtitle = subtitle;
 
         RemoveCommand = new RelayCommand(_ => RemoveRequested?.Invoke(this, EventArgs.Empty));
+        FlipCommand = new RelayCommand(_ => FlipRequested?.Invoke(this, EventArgs.Empty));
         ResetGainCommand = new RelayCommand(_ => GainDb = 0);
         ResetPanCommand = new RelayCommand(_ => Pan = 0);
     }
@@ -83,11 +84,19 @@ public abstract class PatchNodeViewModel : ObservableObject
     /// <summary>Extra line under the title. Only a program that has been taken over has one.</summary>
     public virtual string RouteText => string.Empty;
 
+    /// <summary>
+    /// True for a box made from a cable, which has an end on each side: its input can become
+    /// the output that plays into the same cable, and the other way round.
+    /// </summary>
+    public virtual bool CanFlip => false;
+
     public RelayCommand RemoveCommand { get; }
+    public RelayCommand FlipCommand { get; }
     public RelayCommand ResetGainCommand { get; }
     public RelayCommand ResetPanCommand { get; }
 
     public event EventHandler? RemoveRequested;
+    public event EventHandler? FlipRequested;
 
     /// <summary>Raised when the node moves, so the cables attached to it can redraw.</summary>
     public event EventHandler? Moved;
@@ -273,7 +282,8 @@ public abstract class PatchNodeViewModel : ObservableObject
         private set => SetProperty(ref _formatText, value);
     }
 
-    public void ApplyStatus(NodeStatus status, string? detail, string? hint, int sampleRate, int channels)
+    /// <param name="latency">What the device stream got, "exclusive · 144 samples (3.0 ms)", shown in place of the channel count.</param>
+    public void ApplyStatus(NodeStatus status, string? detail, string? hint, int sampleRate, int channels, string? latency = null)
     {
         if (SetProperty(ref _status, status, nameof(IsLive)))
         {
@@ -291,9 +301,11 @@ public abstract class PatchNodeViewModel : ObservableObject
 
         StatusHint = status is NodeStatus.Failed or NodeStatus.Waiting ? hint : null;
 
-        FormatText = status == NodeStatus.Live && sampleRate > 0
-            ? $"{sampleRate / 1000.0:0.#} kHz · {DescribeChannels(channels)}"
-            : string.Empty;
+        FormatText = status != NodeStatus.Live || sampleRate <= 0
+            ? string.Empty
+            : string.IsNullOrEmpty(latency)
+                ? $"{sampleRate / 1000.0:0.#} kHz · {DescribeChannels(channels)}"
+                : $"{sampleRate / 1000.0:0.#} kHz · {latency}";
     }
 
     private static string DescribeChannels(int channels) => channels switch
@@ -368,6 +380,8 @@ public sealed class SourceNodeViewModel : PatchNodeViewModel
     public bool HasInletBadge => !string.IsNullOrEmpty(_inletBadge);
 
     public override bool IsSource => true;
+
+    public override bool CanFlip => Kind == SourceKind.Device && IsVirtualInput;
 
     /// <summary>Only a program can be taken off its own output. A microphone has none.</summary>
     public override bool SupportsExclusive => Kind == SourceKind.Application;
@@ -523,6 +537,8 @@ public sealed class DestinationNodeViewModel : PatchNodeViewModel
     public bool HasPickupHint => !string.IsNullOrEmpty(_pickupHint);
 
     public override bool IsSource => false;
+
+    public override bool CanFlip => IsVirtualCable;
 
     public override string Glyph => IsVirtualCable ? "\uE71B" : "\uE767";
 }

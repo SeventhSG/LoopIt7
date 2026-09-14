@@ -72,7 +72,7 @@ on any rig. Change whatever does not fit.
 
 To build one by hand:
 
-  1. Press "Add source" and pick a microphone, a playback device to tap, or a
+  1. Press "Add input" and pick a microphone, a playback device to tap, or a
      running program.
   2. Press "Add output" and pick where it should land.
   3. Drag from the circle on the right of the source to the output box.
@@ -135,7 +135,7 @@ LoopIt7 can capture one application on its own, with no virtual cable and no
 driver at all. Spotify without the game. The game without Discord.
 
 Only programs Windows currently lists as playing appear in the menu, so start
-playback first, then open "Add source".
+playback first, then open "Add input".
 
 This needs Windows 10 build 20348 or later.
 
@@ -157,8 +157,8 @@ reach it by being assigned to it here instead of choosing it there.
 A WAY IN FROM WINDOWS
 -------------------------------------------------------------------------------
 
-Add source lists FROM ANOTHER PROGRAM at the top. Those are cables, and picking
-one puts a box on the canvas fed by whatever is playing into it.
+Add cable lists the cables on this machine. Under In, picking one puts a box on
+the canvas fed by whatever is playing into it.
 
 A cable is a free driver with two ends. The other program sends to one end,
 LoopIt7 listens on the other, and what arrives is a source like any microphone.

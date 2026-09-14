@@ -2,8 +2,9 @@
 
 <img src="assets/banner.png" alt="LoopIt7" width="100%">
 
-**A patchbay for Windows audio. Name your own outputs, send programs to them, and fan them
-out anywhere.**
+### Every mic, every program, every output. One canvas. You draw the cables.
+
+**A free patchbay for Windows audio, with a mixer on every connection.**
 
 [![Build](https://img.shields.io/github/actions/workflow/status/SeventhSG/LoopIt7/build.yml?branch=main&style=flat-square&label=build&color=E8A33D&labelColor=1A1714)](https://github.com/SeventhSG/LoopIt7/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/SeventhSG/LoopIt7?style=flat-square&color=E8A33D&labelColor=1A1714)](https://github.com/SeventhSG/LoopIt7/releases/latest)
@@ -11,209 +12,101 @@ out anywhere.**
 [![License](https://img.shields.io/github/license/SeventhSG/LoopIt7?style=flat-square&color=E8A33D&labelColor=1A1714)](LICENSE)
 [![Windows 11](https://img.shields.io/badge/Windows-11-E8A33D?style=flat-square&labelColor=1A1714)](#requirements)
 
-### [Download LoopIt7 Setup](https://github.com/SeventhSG/LoopIt7/releases/latest)
+## [⬇ Download LoopIt7](https://github.com/SeventhSG/LoopIt7/releases/latest)
 
-2.3 MB. Installs for the current user, so there is no admin prompt.
+Free. Open source. About 3 MB.
 
 </div>
 
 ---
 
-<img src="assets/patchbay.png" alt="Discord, Spotify and a microphone feeding a virtual output named Stream, which fans out to two outputs" width="100%">
+<img src="assets/patchbay.png" alt="The LoopIt7 patchbay: sources on the left, outputs on the right, cables between them" width="100%">
+
+## Get started in two minutes
+
+1. **Download** `LoopIt7-Setup.exe` from [Releases](https://github.com/SeventhSG/LoopIt7/releases/latest) and run it.
+2. **Keep "Install Virtual Audio Cable Lite" ticked.** Its own installer opens partway through;
+   click through it. Setup waits, then names the cable **LoopIt7 Cable** for you and tells you
+   when it is ready.
+3. **Open LoopIt7**, press **Add source** and **Add output**, and drag a cable between them.
+4. **Turn your volume down**, then press **Start routing**.
+
+That is it. Already have LoopIt7? Run the same setup file: it updates in place and keeps your
+pages, presets and options exactly as they were.
+
+### Requirements
+
+- Windows 11, or Windows 10 build 20348 and later
+- The .NET 10 desktop runtime. Setup fetches it for you if it is missing.
+
+### "Windows protected your PC"
+
+LoopIt7 is not code signed yet, so SmartScreen shows a blue warning the first time. Press
+**More info**, then **Run anyway**. On a PC with **Smart App Control** switched on, Windows
+blocks unsigned apps outright; getting LoopIt7 signed is in progress. Until then, every release
+is built in the open by [GitHub Actions](https://github.com/SeventhSG/LoopIt7/actions) from the
+tagged commit in this repository, so you can see exactly what you are running.
 
 ## What it is
 
-Windows gives you one output at a time and no way to see where your audio is going. LoopIt7
-puts every microphone, speaker, headset, interface and running program on one canvas and lets
-you draw the connections yourself.
+Windows plays audio to one output at a time and never shows you where anything is going.
+LoopIt7 puts every microphone, speaker, headset, interface and running program on one canvas,
+and you draw the connections yourself.
 
-One microphone can reach your headphones and the room monitors at once. Spotify can go to
-Discord without going through your mic. A game can go to the stream but not to your ears. The
-meters move while it happens, so you can see which cable is carrying what.
+- **Your mic in your headphones and on the room monitors**, at the same time.
+- **Spotify into Discord** without it going through your microphone.
+- **The game on stream but not in your ears.**
+- **Your DAW into OBS**, through a cable that carries LoopIt7's name.
 
-## Virtual outputs
+The meters move while it happens, so you always see which cable is carrying what.
 
-**Make an output of your own, name it, and decide what comes out of it.**
+## How to use it
 
-Press **Add virtual output** and call it whatever it is for. *Discord*. *Stream*. *Speakers in
-the other room*. Then press the **+** on the box and pick the programs that should play
-through it. Each one gets captured on its own and taken off its own output, so it comes out of
-your named box instead of where Windows was sending it.
-
-Now pull cables out of that box to as many real outputs as you like. One name, one fader, one
-mute, and everything you assigned to it lands everywhere you pointed it.
-
-```
-  Discord  ─┐
-  Spotify  ─┼──▶  [ Stream ]  ──┬──▶  Headphones
-  Mic      ─┘                   └──▶  Elgato Virtual Audio  ──▶  OBS
-```
-
-Change where the whole thing goes by moving one cable rather than reaching into three
-programs' settings. Virtual outputs can feed each other, and a chain that would close on
-itself is refused before it can run away.
-
-**It is a box inside LoopIt7, not a Windows device.** Nothing else on the machine can pick it
-from a dropdown, which is exactly why you assign programs to it here rather than there. The
-reason for that is a driver, and there is an honest section about it further down.
-
-## What it does
-
-**Sources.** Any recording endpoint, any playback endpoint tapped in loopback, and any single
-running program. That last one is the interesting part: LoopIt7 captures one application on
-its own, with no virtual cable and no driver, using the process loopback API Windows has
-shipped since build 20348. Spotify without the game. The game without Discord.
-
-**Virtual outputs.** A box you name, assign programs to, and fan out to as many real outputs
-as you like. It sums whatever arrives, carries its own fader, mute, balance and meter, and
-keeps its own clock so it can feed a 44.1 kHz interface and a 48 kHz headset at the same time.
-
-**Destinations.** Any playback endpoint, including software cables that are already installed.
-Virtual Audio Cable, VB-Audio Cable, VoiceMeeter, Elgato Virtual Audio and NVIDIA Broadcast are
-recognised and labelled, so you can tell a real speaker from a pipe to another program.
-
-**A cable of its own.** Setup can install [Virtual Audio Cable Lite](https://vac.muzychenko.net/en/)
-by Eugene Muzychenko, unmodified, and LoopIt7 names it "LoopIt7 Cable". Add cable puts it on any
-page: **In** to hear what a program plays into it, **Out** to send a mix a program records from.
-VAC Lite is free for private, non-commercial use; anyone earning money with it needs a full VAC
-licence from its author.
-
-**Cables.** One source can feed many outputs. One output can sum many sources. Every cable has
-its own trim, mute and alignment delay, because the speaker across the room is further away
-than the one on your desk.
-
-**A real mixer.** Every source and every output has a fader, a mute, a stereo balance and a
-live meter. Sources can be soloed, and soloing anything drops everything else, the way a
-mixing desk does it. Patching a device's own loopback back into that device is refused
-outright, because that is a feedback loop and it arrives in somebody's headphones.
-
-**Only through LoopIt7.** A program you assign to a virtual output is muted in the Windows
-volume mixer while routing runs, so you hear it once, where you put it, rather than twice.
-The moment routing stops, the box is removed, or LoopIt7 closes, the program gets its own
-output straight back. Nothing is left behind in anybody's volume mixer.
-
-**Two starting points.** An empty patchbay offers a **Streaming setup** and a **Monitoring
-setup**. Both are built from whatever the machine has, resolved by role at the moment you
-press them, so they land somewhere sensible on a laptop with one headset and on a rig with an
-interface. Then you change whatever does not fit.
-
-| Workspace | What lives there |
+| Button | What it puts on the page |
 | --- | --- |
-| **Patchbay** | The canvas. Boxes you drag, ports you pull cables from, meters that move. Sources on the left, virtual outputs in the middle, real outputs on the right. |
-| **Devices** | Every endpoint on the machine, with its sample rate, bit depth and channel count. Set the default device or change the shared engine format without opening three dialogs. |
-| **MIDI** | Route any MIDI input to any set of MIDI outputs. The half of Apple's Audio MIDI Setup that Windows never had a window for. |
+| **Add source** | A microphone, an audio interface input, everything a device is playing, or **one single program** on its own. |
+| **Add output** | Any speaker, headset, interface or virtual cable. |
+| **Add cable** | The **LoopIt7 Cable**, listed at the top. **In** hears what a program plays into it, so a DAW or game lands on your canvas. **Out** sends a mix into it, so Discord or OBS can pick it as a microphone. |
 
-Plus the things a tool you leave open all day needs: presets, a tray icon, start with Windows,
-a global mute hotkey, and reconnection on its own when a device is unplugged and plugged back
-in.
+Then drag from a source to an output. Every box and every cable has its own **fader, mute,
+balance and meter**. Cables also get a trim and an alignment delay, because the speaker across
+the room is further away than the one on your desk. Solo a source and everything else drops
+out, like on a real mixing desk.
+
+**Pages** work like sheets in a spreadsheet: keep a streaming setup, a monitoring setup and a
+rehearsal setup side by side and flip between them with the tabs at the bottom.
+
+**Can't hurt your ears.** A connection that would loop a device back into itself is refused
+before it is made, not just warned about, because a feedback loop reaches full volume in under
+a second in whatever you are wearing.
 
 <div align="center">
 <img src="assets/devices.png" alt="The Devices workspace listing every endpoint with its format" width="49%">
 <img src="assets/midi.png" alt="The MIDI workspace" width="49%">
 </div>
 
-## About virtual devices, honestly
+| Workspace | What lives there |
+| --- | --- |
+| **Patchbay** | The canvas. Boxes you drag, ports you pull cables from, meters that move. |
+| **Devices** | Every endpoint with its sample rate, bit depth and channels. Set the default device or the shared format without opening three dialogs. |
+| **MIDI** | Route any MIDI input to any set of MIDI outputs. The half of Apple's Audio MIDI Setup Windows never had a window for. |
 
-On macOS, Loopback creates its own virtual devices. It can do that because it ships a kernel
-extension. Windows works the same way and offers no shortcut.
+Plus what a tool you leave open all day needs: a tray icon, start with Windows, a global mute
+hotkey, presets, two ready made starting setups, and reconnecting on its own when a device is
+unplugged and plugged back in.
 
-An audio endpoint on Windows comes from a kernel mode driver. There is no user mode API that
-adds one, and Windows 11 x64 will not load an unsigned driver. Any program claiming otherwise
-is either installing a driver of its own or using one that is already there.
+---
 
-So LoopIt7 does not pretend. It does everything that does not need a driver, and it does it
-without asking you to install anything:
+## 🤓 For the nerds
 
-- Per application capture, driver free.
-- Device loopback, driver free.
-- Any output as a destination, driver free.
-- Virtual outputs of your own, driver free.
+Everything below is how it works under the hood. None of it is needed to use LoopIt7.
 
-That last one is worth being precise about, because the name invites the wrong idea. On its
-own, a LoopIt7 virtual output is a **box inside LoopIt7**. It does not appear in the Windows
-sound settings and no program can select it, because a device on Windows comes from a kernel
-driver and nothing in user space can add one. What the box does instead is take programs in on
-the LoopIt7 side: you assign them, LoopIt7 captures each one, mutes it where Windows was
-sending it, and plays the sum wherever you have pointed the box.
-
-**A way in from Windows.** Add source lists **From another program** at the top: that is a
-cable, and picking one puts a box on the canvas fed by whatever is playing into it. A cable is
-a free driver with two ends. The other program sends to one end, LoopIt7 listens on the other,
-and what arrives is a source like any microphone, ready to patch to as many outputs as you
-like. This is the half a DAW wants: set your output device to **LoopIt7 Cable** and the DAW is
-on the canvas.
-
-The same cable can instead be given to a virtual output, with the link button on the box, if
-you want what arrives to be summed with other programs before it leaves. Either way the picker
-lists the ends as pairs, so nothing is guessed, and if there is no cable on the machine it says
-so and offers to fetch one.
-
-**What it is called.** A cable LoopIt7 installed is named **LoopIt7 Cable** the first time the
-app sees it, without waiting to be asked, because the name is the only handle anybody has on it
-from inside a DAW or Discord. Give it to a virtual output and it takes that box's name instead,
-so the word in Discord's list is the word on your canvas.
-
-A cable that was already here keeps the name it came with. It is written down in somebody's OBS
-scene and their Discord settings, and LoopIt7 has no business renaming it behind their back.
-The Devices page will offer to take one over if you want it to, in as many words and naming the
-device it would change. Uninstalling puts back every name LoopIt7 changed.
-
-A cable has two ends and Windows never says which belongs to which, which is the quietest way
-a routing setup fails. LoopIt7 pairs them for you and says so in plain words: send audio to
-this output, then choose *that* input in OBS or Discord. It is on the destination box and in
-the Devices list.
-
-You may see community virtual audio drivers advertised as signed. Check what signed means
-before you rely on one: a kernel driver has to carry a **Microsoft** attestation signature,
-and an ordinary code signing certificate, however legitimate, will still be refused by the
-loader with error 52.
-
-Work towards a LoopIt7 cable of our own lives in [`driver/`](driver/README.md), along with a
-plain account of what it needs: a WDK, test signing for development, and Microsoft attestation
-signing before it can reach anybody else.
-
-## Install
-
-Grab `LoopIt7-Setup.exe` from [Releases](https://github.com/SeventhSG/LoopIt7/releases/latest)
-and run it. It installs for the current user, so there is no admin prompt, and it fetches the
-.NET 10 desktop runtime if the machine does not have it.
-
-Already have LoopIt7? Run the same file. Setup finds the copy you have, closes it if it is
-running, replaces it where it already lives, and leaves your patchbay, presets and options
-exactly as they were.
-
-### About the Windows warning
-
-The download is **not code signed**, so SmartScreen shows a blue "Windows protected your PC"
-box the first time you run it. Press **More info**, then **Run anyway**.
-
-That is not a workaround, it is the honest state of things: removing that box needs a code
-signing certificate from a commercial authority, which costs a few hundred a year and, for the
-cheaper kinds, only stops warning once the file has built up download reputation. Signing it
-here with a certificate made on this machine would not help, because Windows trusts a
-publisher it has never heard of no further than an unsigned file, and shows a worse dialog for
-it.
-
-Verify the download instead of trusting it. Every release is built in the open by
-[GitHub Actions](https://github.com/SeventhSG/LoopIt7/actions) from the tagged commit in this
-repository, and the same workflow signs the app and the installer automatically the moment a
-certificate is added to the repository secrets.
-
-### Requirements
-
-- Windows 11, or Windows 10 build 20348 and later for per application capture
-- The .NET 10 desktop runtime, which the installer offers to fetch
-
-## How it works
+### The engine
 
 The engine is a graph. Each source opens its own WASAPI capture and converts to stereo float at
-its own rate. Each cable owns a ring buffer, a delay line and a fader, and resamples once on
-its way to the destination it belongs to. Each destination sums its incoming cables and hands
-the result to WASAPI on that endpoint's own clock.
-
-Nothing shares a clock, which is what lets a 44.1 kHz interface and a 48 kHz headset run off
-the same microphone without one stalling the other. Cables trim their own queues so drift
-between two independent clocks never turns into a monitor mix that is a quarter second late.
+its own rate. Each cable owns a ring buffer, a delay line and a fader, and resamples once on its
+way to the destination it belongs to. Each destination sums its incoming cables and hands the
+result to WASAPI on that endpoint's own clock.
 
 ```
 source ──┬─ cable ─ delay ─ trim ─ resample ─┐
@@ -221,47 +114,76 @@ source ──┬─ cable ─ delay ─ trim ─ resample ─┐
 source ──┴─ cable ─ delay ─ trim ─ resample ─┘
 ```
 
-A virtual output is both halves of that picture at once: it sums its incoming cables like a
-destination, then pushes the result down its own outgoing cables like a source. Every other
-node rides a clock somebody else owns, a capture endpoint's or a render endpoint's. This one
-has neither, so it keeps its own on a timer thread at 48 kHz and renders what the wall clock
-says is due. `LoopIt7.exe --self-test` measures exactly that, without opening a device or
-making a sound.
+Nothing shares a clock. That is what lets a 44.1 kHz interface and a 48 kHz headset run off the
+same microphone without one stalling the other, and it is why cables trim their own queues:
+two independent clocks drift, and untrimmed drift becomes a monitor mix a quarter second late.
 
-```
-program ─┐
-program ─┼──▶ [ virtual output ] ──┬── cable ──▶ output
-mic     ─┘     sum · fader · clock └── cable ──▶ output
-```
+Single program capture needs no driver at all. It uses the process loopback API Windows has
+shipped since build 20348, which is why that is the minimum Windows 10 build.
 
-## Build it yourself
+### Why a cable needs a driver
 
-You need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). For the
-installer you also need [Inno Setup](https://jrsoftware.org/isdl.php).
+On Windows, an audio device comes from a kernel mode driver. No user mode API adds one, and
+Windows only loads a kernel driver that **Microsoft** has signed. An ordinary code signing
+certificate is not enough: the loader still refuses it with error 52. Check the signer, not the
+status, before trusting any "signed" community driver.
+
+So LoopIt7 does everything it can without a driver (per program capture, device loopback, any
+output as a destination) and, for the one thing that needs one, bundles
+[Virtual Audio Cable Lite](https://vac.muzychenko.net/en/) by Eugene Muzychenko. Its driver is
+signed by Microsoft, and its licence allows handing out the Lite version with a free program,
+unmodified. VAC Lite is free for private, non-commercial use; if you earn money with it, buy a
+full VAC licence from its author.
+
+### What the cable is called
+
+Setup names the cable it installed **LoopIt7 Cable** before it finishes, because that name is
+the only handle a DAW or Discord has on it. The driver itself is untouched: LoopIt7 changes the
+name Windows shows, and writes down the original so uninstalling puts it back.
+
+A cable that was already on your PC keeps its own name. It is written into somebody's OBS scene
+and Discord settings, and LoopIt7 has no business renaming it behind their back. The Devices
+page offers to take one over if you ask, and names the device it would change.
+
+A cable has two ends, and Windows never says which belongs to which. That is the quietest way a
+routing setup fails, so LoopIt7 pairs them for you and says so in plain words.
+
+### A driver of our own
+
+[`driver/`](driver/README.md) holds **LoopIt7 Cable**, a first party virtual audio driver built
+on Microsoft's SysVAD sample: a lock protected ring with a cursor per reader, one fixed format,
+and a cable only INF. It has been round trip tested on real hardware with exact level and no
+dropouts. Shipping it needs Microsoft attestation signing, which is why setup bundles VAC Lite
+for now.
+
+### Build it yourself
+
+You need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), plus
+[Inno Setup](https://jrsoftware.org/isdl.php) for the installer.
 
 ```powershell
 git clone https://github.com/SeventhSG/LoopIt7.git
 cd LoopIt7
 
-# App only
-dotnet build src\LoopIt7\LoopIt7.csproj -c Release
-
-# Artwork, publish and installer, all the way to dist\
-powershell -ExecutionPolicy Bypass -File build\build.ps1
+dotnet build src\LoopIt7\LoopIt7.csproj -c Release   # app only
+dotnet run --project tests\LoopIt7.Tests             # routing safety rules, headless
+powershell -ExecutionPolicy Bypass -File build\build.ps1   # tests, artwork, publish, installer
 ```
 
-`build\make-assets.ps1` draws the icon, the banner and the installer artwork from one set of
-geometry, so the mark is never redrawn by hand. `build\screenshot.ps1` captures the running
-window for this page.
+`build\build.ps1` refuses to publish if the safety tests fail, and downloads VAC Lite for the
+installer, checked against a pinned hash. `build\make-assets.ps1` draws the icon, banner and
+installer artwork from one set of geometry.
 
-If something goes wrong, `LoopIt7.exe --self-test` writes a report to
-`%AppData%\LoopIt7\self-test.txt` saying what this machine supports and whether capture works.
+Something not working? `LoopIt7.exe --self-test` writes a report to
+`%AppData%\LoopIt7\self-test.txt` saying what your PC supports and whether capture works.
 
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
 
-Built on [NAudio](https://github.com/naudio/NAudio) by Mark Heath.
+Built on [NAudio](https://github.com/naudio/NAudio) by Mark Heath. The bundled cable is
+[Virtual Audio Cable Lite](https://vac.muzychenko.net/en/) by Eugene Muzychenko, under its own
+licence.
 
 ---
 

@@ -102,6 +102,10 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 
 [Run]
 #ifdef BundleCable
+; A new cable can become the default playback device, which would send everything the user
+; plays into the cable instead of their speakers. The defaults are written down first, and the
+; naming step below puts back any that moved onto the cable.
+Filename: "{app}\{#AppExeName}"; Parameters: "--save-defaults"; StatusMsg: "Preparing the virtual audio cable..."; Flags: runhidden waituntilterminated; Tasks: cable cableupdate
 ; VAC's installer asks for administrator rights itself, which is why this goes through the
 ; shell rather than being run directly: LoopIt7's own setup stays unelevated.
 Filename: "{tmp}\vac\setup.exe"; WorkingDir: "{tmp}\vac"; StatusMsg: "Installing Virtual Audio Cable Lite. Finish its installer, then setup continues..."; Flags: shellexec waituntilterminated; Tasks: cable cableupdate; AfterInstall: WriteCableMarker

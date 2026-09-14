@@ -1248,7 +1248,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (systemAudio.Id != primaryOutput.Id) TryConnect(desktop, monitor);
         }
 
-        var cable = OutputDevices.FirstOrDefault(VirtualCableService.IsVirtual);
+        // LoopIt7's own cable first: it is the one named for this, where somebody else's
+        // Elgato or VoiceMeeter device belongs to their own setup.
+        var cable = OutputDevices
+            .Where(VirtualCableService.IsVirtual)
+            .OrderByDescending(d => CableOwnership.IsOwned(_settings, d))
+            .FirstOrDefault();
         if (cable is not null)
         {
             var broadcast = AddDestination(cable);

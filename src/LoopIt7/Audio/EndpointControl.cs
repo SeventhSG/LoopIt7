@@ -20,6 +20,31 @@ public static class EndpointControl
 
     public static readonly int[] StandardBitDepths = [16, 24, 32];
 
+    /// <summary>
+    /// Sets the default for one role only (0 console, 1 multimedia, 2 communications). Used to
+    /// put back exactly what a cable installer moved, where a headset may be the default for
+    /// calls and speakers for everything else.
+    /// </summary>
+    public static bool TrySetDefaultForRole(string deviceId, int role)
+    {
+        try
+        {
+            var config = CreatePolicyConfig();
+            try
+            {
+                return config.SetDefaultEndpoint(deviceId, role) == 0;
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(config);
+            }
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public static bool TrySetDefault(string deviceId, out string? error)
     {
         try

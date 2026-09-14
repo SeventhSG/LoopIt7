@@ -40,6 +40,13 @@ public partial class App : Application
             return;
         }
 
+        if (e.Args.Any(a => string.Equals(a, "--save-defaults", StringComparison.OrdinalIgnoreCase)))
+        {
+            SaveDefaults();
+            Shutdown();
+            return;
+        }
+
         if (e.Args.Any(a => string.Equals(a, "--name-cables", StringComparison.OrdinalIgnoreCase)))
         {
             Shutdown(NameCables());
@@ -196,6 +203,10 @@ public partial class App : Application
                         settingsService.Save(settings);
                     }
 
+                    RestoreDefaults(settings.ClaimedCables
+                        .SelectMany(c => new[] { c.RenderEndpointId, c.CaptureEndpointId })
+                        .ToList());
+
                     System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(report)!);
                     System.IO.File.WriteAllText(report, named);
                     return 0;
@@ -210,6 +221,83 @@ public partial class App : Application
         {
             // Setup must finish either way. The running app names the cable on first start.
             return 1;
+        }
+    }
+
+    private static string DefaultsFile => System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LoopIt7", "defaults-before-cable.txt");
+
+    private static readonly (NAudio.CoreAudioApi.DataFlow Flow, NAudio.CoreAudioApi.Role Role)[] DefaultSlots =
+    [
+        (NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.Role.Console),
+        (NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.Role.Multimedia),
+        (NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.Role.Communications),
+        (NAudio.CoreAudioApi.DataFlow.Capture, NAudio.CoreAudioApi.Role.Console),
+        (NAudio.CoreAudioApi.DataFlow.Capture, NAudio.CoreAudioApi.Role.Multimedia),
+        (NAudio.CoreAudioApi.DataFlow.Capture, NAudio.CoreAudioApi.Role.Communications)
+    ];
+
+    private static string? DefaultId(NAudio.CoreAudioApi.MMDeviceEnumerator enumerator,
+        NAudio.CoreAudioApi.DataFlow flow, NAudio.CoreAudioApi.Role role)
+    {
+        try { return enumerator.GetDefaultAudioEndpoint(flow, role).ID; }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Setup runs this just before the cable's own installer. A new cable can become the
+    /// default playback device, and then everything the user plays goes into the cable instead
+    /// of their speakers. Writing the defaults down first is what lets --name-cables put them
+    /// back. Opens no device and makes no sound.
+    /// </summary>
+    private static void SaveDefaults()
+    {
+        try
+        {
+            using var enumerator = new NAudio.CoreAudioApi.MMDeviceEnumerator();
+            var lines = DefaultSlots
+                .Select(s => (s, id: DefaultId(enumerator, s.Flow, s.Role)))
+                .Where(x => x.id is not null)
+                .Select(x => $"{(int)x.s.Flow}|{(int)x.s.Role}|{x.id}");
+
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(DefaultsFile)!);
+            System.IO.File.WriteAllLines(DefaultsFile, lines);
+        }
+        catch
+        {
+            // Setup carries on regardless; the worst case is a default the user sets back.
+        }
+    }
+
+    /// <summary>
+    /// Puts back any default device the cable's installer moved onto the cable. Only a role now
+    /// pointing at one of the cable's own ends is touched, so a choice the user made in the
+    /// meantime is left alone.
+    /// </summary>
+    private static void RestoreDefaults(IReadOnlyCollection<string> cableEnds)
+    {
+        try
+        {
+            if (!System.IO.File.Exists(DefaultsFile)) return;
+
+            using var enumerator = new NAudio.CoreAudioApi.MMDeviceEnumerator();
+            foreach (string line in System.IO.File.ReadAllLines(DefaultsFile))
+            {
+                var parts = line.Split('|', 3);
+                if (parts.Length != 3 || !int.TryParse(parts[0], out int flow) || !int.TryParse(parts[1], out int role)) continue;
+
+                string? now = DefaultId(enumerator, (NAudio.CoreAudioApi.DataFlow)flow, (NAudio.CoreAudioApi.Role)role);
+                if (now is null || string.Equals(now, parts[2], StringComparison.OrdinalIgnoreCase)) continue;
+                if (!cableEnds.Contains(now, StringComparer.OrdinalIgnoreCase)) continue;
+
+                Audio.EndpointControl.TrySetDefaultForRole(parts[2], role);
+            }
+
+            System.IO.File.Delete(DefaultsFile);
+        }
+        catch
+        {
+            // Best effort: the user can always pick their default again in Sound settings.
         }
     }
 

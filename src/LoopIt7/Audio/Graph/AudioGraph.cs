@@ -293,13 +293,14 @@ public sealed class AudioGraph : IDisposable
 
     // Reading back
 
-    public NodeStatus GetSourceStatus(string id, out string? detail, out int sampleRate, out int channels)
+    public NodeStatus GetSourceStatus(string id, out string? detail, out string? hint, out int sampleRate, out int channels)
     {
         lock (_sync)
         {
             if (_sources.TryGetValue(id, out var source))
             {
                 detail = source.StatusDetail;
+                hint = source.StatusHint;
                 sampleRate = source.Status == NodeStatus.Live ? source.StereoFormat.SampleRate : 0;
                 channels = source.NativeChannels;
                 return source.Status;
@@ -307,18 +308,20 @@ public sealed class AudioGraph : IDisposable
         }
 
         detail = null;
+        hint = null;
         sampleRate = 0;
         channels = 0;
         return NodeStatus.Idle;
     }
 
-    public NodeStatus GetDestinationStatus(string id, out string? detail, out int sampleRate, out int channels)
+    public NodeStatus GetDestinationStatus(string id, out string? detail, out string? hint, out int sampleRate, out int channels)
     {
         lock (_sync)
         {
             if (_destinations.TryGetValue(id, out var destination))
             {
                 detail = destination.StatusDetail;
+                hint = destination.StatusHint;
                 sampleRate = destination.Status == NodeStatus.Live ? destination.SampleRate : 0;
                 channels = destination.Channels;
                 return destination.Status;
@@ -326,6 +329,7 @@ public sealed class AudioGraph : IDisposable
         }
 
         detail = null;
+        hint = null;
         sampleRate = 0;
         channels = 0;
         return NodeStatus.Idle;

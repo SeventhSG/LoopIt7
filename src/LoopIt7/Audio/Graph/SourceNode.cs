@@ -34,6 +34,9 @@ internal abstract class SourceNode : IDisposable
     public NodeStatus Status { get; protected set; } = NodeStatus.Idle;
     public string? StatusDetail { get; protected set; }
 
+    /// <summary>What the user can do about a problem, when there is anything. Null otherwise.</summary>
+    public string? StatusHint { get; protected set; }
+
     /// <summary>Stereo float format the cables leaving this node are written in.</summary>
     public WaveFormat StereoFormat { get; protected set; } = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
 
@@ -80,6 +83,7 @@ internal abstract class SourceNode : IDisposable
         Stop();
         Status = NodeStatus.Waiting;
         StatusDetail = detail;
+        StatusHint = null;
     }
 
     protected void PrepareBus(WaveFormat stereoFormat)
@@ -90,10 +94,11 @@ internal abstract class SourceNode : IDisposable
         _panCurrent = _pan;
     }
 
-    protected void RaiseFailure(string message)
+    protected void RaiseFailure(string message, string? hint = null)
     {
         Status = NodeStatus.Failed;
         StatusDetail = message;
+        StatusHint = hint;
         Failed?.Invoke(this, new GraphErrorEventArgs(Id, message));
     }
 
@@ -228,6 +233,7 @@ internal sealed class DeviceSourceNode : SourceNode
         {
             Status = NodeStatus.Waiting;
             StatusDetail = "Waiting for this device";
+            StatusHint = null;
             error = StatusDetail;
             return false;
         }
@@ -248,14 +254,18 @@ internal sealed class DeviceSourceNode : SourceNode
 
             Status = NodeStatus.Live;
             StatusDetail = null;
+            StatusHint = null;
             error = null;
             return true;
         }
         catch (Exception ex)
         {
+            // Asked before Stop, which lets go of the device the owner is looked up on.
+            var problem = DeviceProblem.From(ex, _device, recording: !_loopback);
             Stop();
-            Status = NodeStatus.Failed;
-            StatusDetail = Describe(ex);
+            Status = problem.Waiting ? NodeStatus.Waiting : NodeStatus.Failed;
+            StatusDetail = problem.Detail;
+            StatusHint = problem.Hint;
             error = StatusDetail;
             return false;
         }
@@ -291,16 +301,9 @@ internal sealed class DeviceSourceNode : SourceNode
     private void OnRecordingStopped(object? sender, StoppedEventArgs e)
     {
         if (e.Exception is null) return;
-        RaiseFailure(Describe(e.Exception));
+        var problem = DeviceProblem.From(e.Exception, _device, recording: !_loopback);
+        RaiseFailure(problem.Detail, problem.Hint);
     }
-
-    private static string Describe(Exception ex) => ex switch
-    {
-        System.Runtime.InteropServices.COMException com when (uint)com.HResult == 0x88890004 => "In use in exclusive mode",
-        System.Runtime.InteropServices.COMException com when (uint)com.HResult == 0x88890008 => "Format not accepted",
-        System.Runtime.InteropServices.COMException => "Windows refused the device",
-        _ => ex.Message
-    };
 }
 
 /// <summary>

@@ -478,7 +478,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         foreach (var node in AllNodes())
         {
             node.Peak = 0;
-            node.ApplyStatus(NodeStatus.Idle, null, 0, 0);
+            node.ApplyStatus(NodeStatus.Idle, null, null, 0, 0);
         }
 
         foreach (var cable in Cables) cable.Peak = 0;
@@ -1567,8 +1567,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         foreach (var source in Sources)
         {
-            var status = _graph.GetSourceStatus(source.Id, out string? detail, out int rate, out int channels);
-            source.ApplyStatus(status, detail, rate, channels);
+            var status = _graph.GetSourceStatus(source.Id, out string? detail, out string? hint, out int rate, out int channels);
+            source.ApplyStatus(status, detail, hint, rate, channels);
             source.Peak = status == NodeStatus.Live ? _graph.ReadSourcePeak(source.Id) : 0;
             if (status == NodeStatus.Live) live++;
 
@@ -1582,16 +1582,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         foreach (var virtualOutput in VirtualOutputs)
         {
             // The engine drives a virtual output as a source, so it reports like one.
-            var busStatus = _graph.GetSourceStatus(virtualOutput.Id, out string? busDetail, out int busRate, out int busChannels);
-            virtualOutput.ApplyStatus(busStatus, busDetail, busRate, busChannels);
+            var busStatus = _graph.GetSourceStatus(virtualOutput.Id, out string? busDetail, out string? busHint, out int busRate, out int busChannels);
+            virtualOutput.ApplyStatus(busStatus, busDetail, busHint, busRate, busChannels);
             virtualOutput.Peak = busStatus == NodeStatus.Live ? _graph.ReadSourcePeak(virtualOutput.Id) : 0;
             if (busStatus == NodeStatus.Live) live++;
         }
 
         foreach (var destination in Destinations)
         {
-            var status = _graph.GetDestinationStatus(destination.Id, out string? detail, out int rate, out int channels);
-            destination.ApplyStatus(status, detail, rate, channels);
+            var status = _graph.GetDestinationStatus(destination.Id, out string? detail, out string? hint, out int rate, out int channels);
+            destination.ApplyStatus(status, detail, hint, rate, channels);
             destination.Peak = status == NodeStatus.Live ? _graph.ReadDestinationPeak(destination.Id) : 0;
             if (status == NodeStatus.Live) live++;
         }

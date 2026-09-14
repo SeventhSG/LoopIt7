@@ -25,6 +25,7 @@ public abstract class PatchNodeViewModel : ObservableObject
     private bool _isSelected;
     private NodeStatus _status = NodeStatus.Idle;
     private string _statusText = "Not routing";
+    private string? _statusHint;
     private string _formatText = string.Empty;
     private string _title;
     private string _subtitle;
@@ -253,6 +254,18 @@ public abstract class PatchNodeViewModel : ObservableObject
         private set => SetProperty(ref _statusText, value);
     }
 
+    /// <summary>What to do about the problem in <see cref="StatusText"/>, shown as its tooltip.</summary>
+    public string? StatusHint
+    {
+        get => _statusHint;
+        private set
+        {
+            if (SetProperty(ref _statusHint, value)) OnPropertyChanged(nameof(HasStatusHint));
+        }
+    }
+
+    public bool HasStatusHint => !string.IsNullOrEmpty(_statusHint);
+
     /// <summary>Rate and channel count once the node is open, so resampling is visible.</summary>
     public string FormatText
     {
@@ -260,7 +273,7 @@ public abstract class PatchNodeViewModel : ObservableObject
         private set => SetProperty(ref _formatText, value);
     }
 
-    public void ApplyStatus(NodeStatus status, string? detail, int sampleRate, int channels)
+    public void ApplyStatus(NodeStatus status, string? detail, string? hint, int sampleRate, int channels)
     {
         if (SetProperty(ref _status, status, nameof(IsLive)))
         {
@@ -275,6 +288,8 @@ public abstract class PatchNodeViewModel : ObservableObject
             NodeStatus.Failed => detail ?? "Could not open",
             _ => "Not routing"
         };
+
+        StatusHint = status is NodeStatus.Failed or NodeStatus.Waiting ? hint : null;
 
         FormatText = status == NodeStatus.Live && sampleRate > 0
             ? $"{sampleRate / 1000.0:0.#} kHz · {DescribeChannels(channels)}"

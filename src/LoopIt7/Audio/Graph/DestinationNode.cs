@@ -32,6 +32,7 @@ internal sealed class DestinationNode : IDisposable
 
     public NodeStatus Status { get; private set; } = NodeStatus.Idle;
     public string? StatusDetail { get; private set; }
+    public string? StatusHint { get; private set; }
 
     public int SampleRate { get; private set; }
     public int Channels { get; private set; }
@@ -91,6 +92,7 @@ internal sealed class DestinationNode : IDisposable
             {
                 Status = NodeStatus.Waiting;
                 StatusDetail = "Waiting for this device";
+                StatusHint = null;
                 error = StatusDetail;
                 return false;
             }
@@ -120,14 +122,18 @@ internal sealed class DestinationNode : IDisposable
 
                 Status = NodeStatus.Live;
                 StatusDetail = null;
+                StatusHint = null;
                 error = null;
                 return true;
             }
             catch (Exception ex)
             {
+                // Asked before StopCore, which lets go of the device the owner is looked up on.
+                var problem = DeviceProblem.From(ex, _device, recording: false);
                 StopCore();
-                Status = NodeStatus.Failed;
-                StatusDetail = Describe(ex);
+                Status = problem.Waiting ? NodeStatus.Waiting : NodeStatus.Failed;
+                StatusDetail = problem.Detail;
+                StatusHint = problem.Hint;
                 error = StatusDetail;
                 return false;
             }
@@ -141,6 +147,7 @@ internal sealed class DestinationNode : IDisposable
             StopCore();
             Status = NodeStatus.Idle;
             StatusDetail = null;
+            StatusHint = null;
         }
     }
 
@@ -165,8 +172,10 @@ internal sealed class DestinationNode : IDisposable
     private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
     {
         if (e.Exception is null) return;
+        var problem = DeviceProblem.From(e.Exception, _device, recording: false);
         Status = NodeStatus.Failed;
-        StatusDetail = Describe(e.Exception);
+        StatusDetail = problem.Detail;
+        StatusHint = problem.Hint;
         Failed?.Invoke(this, new GraphErrorEventArgs(Id, StatusDetail));
     }
 
@@ -189,14 +198,6 @@ internal sealed class DestinationNode : IDisposable
             _device = null;
         }
     }
-
-    private static string Describe(Exception ex) => ex switch
-    {
-        System.Runtime.InteropServices.COMException com when (uint)com.HResult == 0x88890004 => "In use in exclusive mode",
-        System.Runtime.InteropServices.COMException com when (uint)com.HResult == 0x88890008 => "Format not accepted",
-        System.Runtime.InteropServices.COMException => "Windows refused the device",
-        _ => ex.Message
-    };
 
     public void Dispose()
     {

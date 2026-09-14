@@ -46,6 +46,39 @@ public static class ApplicationService
             .ToList();
     }
 
+    /// <summary>
+    /// The program that has an endpoint to itself, or null when it cannot be told. A device
+    /// opened in exclusive mode lets nothing else in, but its owner still shows up as the one
+    /// active session on it, which is enough to name it on the card.
+    /// </summary>
+    public static AudioApplication? FindHolder(MMDevice device)
+    {
+        try
+        {
+            var sessions = device.AudioSessionManager.Sessions;
+            for (int i = 0; i < sessions.Count; i++)
+            {
+                var session = sessions[i];
+                if (session.State != NAudio.CoreAudioApi.Interfaces.AudioSessionState.AudioSessionStateActive) continue;
+
+                int processId = (int)session.GetProcessID;
+                if (processId <= 0 || processId == Environment.ProcessId) continue;
+
+                string executable = SafeProcessName(processId);
+                if (executable.Length == 0) continue;
+
+                string name = ProductName(processId) ?? Prettify(executable, session);
+                return new AudioApplication(processId, executable, name, true);
+            }
+        }
+        catch
+        {
+            // The device can go while it is being asked. Not knowing the owner is fine.
+        }
+
+        return null;
+    }
+
     private static void CollectFrom(MMDevice device, Dictionary<int, AudioApplication> found)
     {
         SessionCollection sessions;
@@ -106,6 +139,22 @@ public static class ApplicationService
         return executable.Length > 1
             ? char.ToUpperInvariant(executable[0]) + executable[1..]
             : executable;
+    }
+
+    /// <summary>The product's own name for itself, so a card says a name rather than an exe.</summary>
+    private static string? ProductName(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            string? description = process.MainModule?.FileVersionInfo.FileDescription?.Trim();
+            return string.IsNullOrEmpty(description) ? null : description;
+        }
+        catch
+        {
+            // An elevated program will not show us its modules.
+            return null;
+        }
     }
 
     private static string SafeProcessName(int processId)
